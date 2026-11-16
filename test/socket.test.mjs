@@ -91,6 +91,14 @@ test('sendTo: a compressed history is put back before the prompt goes, so a resu
   });
 });
 
+test('sendTo: a restore that cannot run never stops the send (deps without historyPath, an id that is not a session id)', { skip }, async () => {
+  await withApp({}, async ({ d }) => {
+    const { historyPath, ...bare } = d;
+    assert.equal((await sendTo(bare, SESS, 'carry on', 3000)).ok, true);
+    assert.equal((await sendTo(d, 's1', 'carry on', 3000)).reply === 'history not restored', false);
+  });
+});
+
 test('archive: after the app confirms and its database shows the session archived, the history is compressed', { skip }, async () => {
   await withApp({}, async ({ home, d }) => {
     const file = historyFile(home, SESS);

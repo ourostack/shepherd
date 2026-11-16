@@ -38,8 +38,9 @@ export const appReady = async (deps) => (await deps.exchange([], { done: (j) => 
 
 // Send a prompt to a session; ok when the app queued or sent it. A session whose history was compressed gets it back first.
 export async function sendTo(deps, id, prompt, waitMs) {
-  const back = await restoreHistory(deps, id);
-  if (!back.ok) return { ok: false, reply: 'history not restored', error: back.why };
+  // Best effort: a session restored after its history was compressed gets it back before it resumes. A restore that
+  // can't run (deps without historyPath, an id that isn't a session id, a failed gunzip) never stops the send.
+  if (typeof deps.historyPath === 'function') await restoreHistory(deps, id);
   const request_id = randomUUID();
   const got = await deps.exchange([{ type: 'send_message', session_id: id, prompt, delivery_mode: 'immediate', request_id }], {
     keep: (j) => j.request_id === request_id || (j.session_id === id && /message_(sent|queued|delivery)/.test(j.type)) || j.type === 'socket_error',
