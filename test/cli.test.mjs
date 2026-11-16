@@ -140,3 +140,19 @@ test('shepherd version and --version print the package version; --json prints it
   for (const v of ['version', '--version']) { const r = run([v]); assert.equal(r.status, 0); assert.equal(r.stdout.trim(), version); }
   assert.deepEqual(JSON.parse(run(['version', '--json']).stdout), { version });
 });
+
+test('shepherd retire: apply is refused while retire.json is off, a bad subcommand is a usage error, and a plan with no app says why', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'shepherd-retire-cli-'));
+  try {
+    const env = { SHEPHERD_RETIRE_CONFIG: path.join(home, 'retire.json') };
+    const apply = run(['retire', 'apply', '--copilot-home', home], env);
+    assert.equal(apply.status, 2);
+    assert.match(apply.stderr, /shepherd: usage: retire apply is off, because .*retire\.json does not say "enabled": true\. Fix: set "enabled": true/);
+    assert.equal(run(['retire', 'sweep'], env).status, 2);
+    const plan = run(['retire', '--copilot-home', home], env);
+    assert.equal(plan.status, 1);
+    assert.match(plan.stdout, /error: could not list the app's sessions: .*no ws\.port/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});

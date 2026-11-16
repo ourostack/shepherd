@@ -1,10 +1,11 @@
 // `shepherd watch --every <s>`: the resident mode the launch agent runs. Each pass runs every duty in turn (the health
-// watch, then the quota balancer's tick, with apply, then the sidebar tidy). Passes never overlap, and a duty that throws is
-// logged while the next one still runs.
+// watch, then the quota balancer's tick, with apply, then the sidebar tidy, then the retire duty: hand-off retirement and the
+// size watch, once its config enables it). Passes never overlap, and a duty that throws is logged while the next one still runs.
 import { deps } from './sessions.mjs';
 import { healthDeps, pass } from './health-watch.mjs';
 import { config as quotaConfig, listen as listenQuota, tick as quotaTick } from './quota.mjs';
 import { sidebarConfig, tidy as sidebarTidy } from './sidebar.mjs';
+import { actionLine, retireConfig, retireDeps, watchRetire } from './retire.mjs';
 
 // Runs the duties every everyMs until stop() is true. The clock and the sleep are injected, so a test can run it on a fake one.
 export async function runResident({ everyMs, duties, now = () => Date.now(), sleep, stop = () => false, log = () => {} }) {
@@ -18,8 +19,9 @@ export async function runResident({ everyMs, duties, now = () => Date.now(), sle
   }
 }
 
-// The duties of one pass, in order. The balancer's listener starts on the first pass that finds the balancer enabled.
-// The sidebar tidy runs at most every everyMinutes (sidebar.json), and only when that config is enabled.
+// The duties of one pass, in order. The balancer's listener starts on the first pass that finds the balancer enabled. The
+// sidebar tidy runs at most every everyMinutes (sidebar.json), and only when that config is enabled. The retire duty (hand-off
+// retirement, then the size watch) does nothing until its config file says "enabled": true.
 export function watchDuties({ copilotHome, quiet = false, say = () => {}, log = () => {} }) {
   const health = healthDeps({ copilotHome });
   let listener = null;
@@ -51,6 +53,15 @@ export function watchDuties({ copilotHome, quiet = false, say = () => {}, log = 
         const changed = r.done.filter((d) => d.ok).length;
         if (!quiet && changed) say(`sidebar tidy: ${changed} project(s) changed`);
         for (const d of r.done.filter((x) => !x.ok)) log(`shepherd: sidebar tidy: ${d.name || d.id} was not changed: ${d.error}`);
+      },
+    },
+    {
+      name: 'retire',
+      run: async () => {
+        if (!retireConfig().enabled) return;
+        const r = await watchRetire(retireDeps({ copilotHome }), { apply: true });
+        for (const err of r.errors) log(`shepherd: retire: ${err}`);
+        for (const e of [...r.retire, ...r.size]) if (e.done && e.what !== 'flag' && !quiet) say(`retire: ${actionLine(e)}`);
       },
     },
   ];

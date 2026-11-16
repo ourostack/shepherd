@@ -145,7 +145,7 @@ export interface ArchiveRow {
   workspaceType?: string | null;
 }
 
-export function readTail(file: string, bytes?: number): string[];
+export function readTail(file: string, bytes?: number, opts?: { keepPartial?: boolean }): string[];
 export function lastTurnAt(lines: string[]): number | null;
 export function loopState(lines: string[]): LoopState;
 export function continuedSince(lines: string[], since: number): boolean;
@@ -248,3 +248,55 @@ export function sidebarPlan(projects: { id: string; name?: string | null; main_r
 /** Plans the sidebar from the app's database; apply sends the app a show or hide request for each change only. Never writes the database. */
 export function sidebarTidy(deps: Deps, opts?: { homes?: string[]; apply?: boolean; waitMs?: number }): Promise<{ ok: boolean; applied: boolean; plan: SidebarEntry[]; done: { id: string; name: string | null; show: boolean; ok: boolean; error: string | null }[] }>;
 export function renderSidebar(out: { plan: SidebarEntry[]; done: { id: string; name: string | null; ok: boolean; error: string | null }[] }, opts?: { enabled?: boolean; file?: string }): string;
+/** One app session as the sidebar lists it, with what its own history says it is doing (src/rows.mjs). */
+export interface AppSessionRow {
+  id: string;
+  name: string;
+  kind: 'workspace' | 'chat';
+  workspaceId: string | null;
+  workspaceType: string | null;
+  projectRepo: string | null;
+  branch: string | null;
+  parentSessionId: string | null;
+  coordinatingCreatorSessionId: string | null;
+  state: 'working' | 'waiting' | 'stuck' | 'idle';
+  detail: string;
+  isRunning: boolean;
+  remote: boolean;
+  updatedAt: string | null;
+  lastActivity: string | null;
+  awaiting?: 'input' | 'plan' | 'permission';
+  openPullRequest?: string;
+  automation?: true;
+}
+
+/** One decision of the retire duties or the size watch. done is false in a plan. */
+export interface RetireAction {
+  what: 'archive' | 'hold' | 'flag' | 'ask' | 'owner';
+  id: string;
+  name?: string;
+  reason?: 'handed-off' | 'finished' | 'oversize-idle' | 'memory-pressure';
+  done: boolean;
+  why: string;
+  to?: string[];
+}
+
+export interface RetireResult {
+  retire: RetireAction[];
+  size: RetireAction[];
+  errors: string[];
+}
+
+/** The app's sidebar sessions with their state (throws ShepherdError when the app is not serving). */
+export function rows(deps: Deps, now?: number): Promise<AppSessionRow[]>;
+/** The retire config from retire.json (SHEPHERD_RETIRE_CONFIG overrides the path). No file: { enabled: false }. */
+export function retireConfig(file?: string): { enabled: boolean };
+export function retireFile(env?: Record<string, string | undefined>, home?: string): string;
+export function retireDeps(opts?: { copilotHome?: string; base?: Deps }): Deps & { tell(text: string): Promise<{ ok: boolean; error: string | null }> };
+/** Hand-off and orphan retirement over the sidebar's sessions. apply false decides and changes nothing. */
+export function retireSessions(listed: AppSessionRow[], deps: Deps, opts?: { apply?: boolean }): Promise<RetireAction[]>;
+/** One pass of retirement then the size watch. apply false is a plan. */
+export function watchRetire(deps: Deps, opts?: { apply?: boolean }): Promise<RetireResult>;
+/** Flags over-limit histories, asks for hand-offs, and archives idle giants. */
+export function noticeOversizedSessions(listed: AppSessionRow[], deps: Deps, opts?: { apply?: boolean }): Promise<{ nudged: number; archived: number; actions: RetireAction[] }>;
+export function whereItLeftOff(row: { id: string; branch?: string | null; projectRepo?: string | null }, deps: Deps): string;
