@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
+import { historyFile } from '../src/index.mjs';
 
 const frame = (text) => {
   const b = Buffer.from(text);
@@ -27,8 +28,9 @@ function* frames(buf) {
   }
 }
 
-// refuse: ids the app answers with an error. silent: ids it takes the message for but never confirms.
-export async function startFakeApp(home, { token = 'tok', refuse = [], silent = [] } = {}) {
+// refuse: ids the app answers with an error. silent: ids it takes the message for but never confirms. turns: a send also
+// writes the session's history (a user message, then a new turn 30 ms later), except for ids in drop, which never take a turn.
+export async function startFakeApp(home, { token = 'tok', refuse = [], silent = [], turns = false, drop = [] } = {}) {
   fs.mkdirSync(path.join(home, 'run'), { recursive: true });
   const received = [];
   const server = http.createServer();
@@ -49,7 +51,10 @@ export async function startFakeApp(home, { token = 'tok', refuse = [], silent = 
         const id = m.session_id || m.workspace_id;
         if (refuse.includes(id)) { say({ type: 'error', request_id: m.request_id, message: `${id} is archived` }); continue; }
         if (silent.includes(id)) continue;
-        if (m.type === 'send_message') say({ type: 'session_message_sent', request_id: m.request_id, session_id: m.session_id });
+        if (m.type === 'send_message') {
+          if (turns) takeTurn(home, id, m.prompt, !drop.includes(id));
+          say({ type: 'session_message_sent', request_id: m.request_id, session_id: m.session_id });
+        }
         if (m.type === 'archive_workspace') say({ type: 'workspace_archived', request_id: m.request_id, workspace_id: m.workspace_id });
         if (m.type === 'archive_session') say({ type: 'general_chat_sessions_changed' });
       }
@@ -60,3 +65,22 @@ export async function startFakeApp(home, { token = 'tok', refuse = [], silent = 
   fs.writeFileSync(path.join(home, 'run', 'ws.token'), token);
   return { received, close: () => new Promise((r) => { for (const s of open) s.destroy(); server.close(r); }) };
 }
+
+function takeTurn(home, id, prompt, turnFollows) {
+  const f = historyFile(home, id);
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  fs.appendFileSync(f, `${JSON.stringify({ type: 'user.message', data: { content: prompt }, timestamp: new Date().toISOString() })}\n`);
+  if (!turnFollows) return;
+  setTimeout(() => {
+    try { fs.appendFileSync(f, `${JSON.stringify({ type: 'assistant.turn_start', data: {}, timestamp: new Date().toISOString() })}\n`); } catch { /* the test folder is gone */ }
+  }, 30);
+}
+
+// A session's history file with these events (type, data, at), for tests: at defaults to now.
+export function writeHistory(home, id, events) {
+  const f = historyFile(home, id);
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  fs.writeFileSync(f, events.map(([type, data = {}, at = Date.now()]) => JSON.stringify({ type, data, timestamp: new Date(at).toISOString() })).join('\n') + '\n');
+  return f;
+}
+

@@ -21,6 +21,8 @@ FROM sessions s LEFT JOIN workspaces w ON w.session_id = s.id
 WHERE s.archived_at IS NULL AND w.archived_at IS NULL`;
 
 export const historyFile = (copilotHome, id) => path.join(copilotHome, 'session-state', id, 'events.jsonl');
+// Shepherd's own small records (the last resume, the health watch), kept out of the app's folder.
+export const stateDir = (home = os.homedir()) => path.join(home, 'Library', 'Caches', 'shepherd');
 
 function judge(deps, r, now) {
   const bytes = deps.historySize(r.id);
@@ -55,8 +57,9 @@ function sqlite(copilotHome, query) {
 
 // The app-facing deps: the database (read-only), each session's history, the socket, and the clock. Tests pass fakes instead.
 // The history is compressed with gzip; the disk ledger is a JSON-lines file that Housesitter's disk job also writes to.
-export function deps({ copilotHome = path.join(os.homedir(), '.copilot'), ledger = process.env.SHEPHERD_DISK_LEDGER || path.join(os.homedir(), 'Library', 'Caches', 'housesitter', 'restart-copilot', 'disk-ledger.jsonl') } = {}) {
+export function deps({ copilotHome = path.join(os.homedir(), '.copilot'), ledger = process.env.SHEPHERD_DISK_LEDGER || path.join(os.homedir(), 'Library', 'Caches', 'housesitter', 'restart-copilot', 'disk-ledger.jsonl'), state = stateDir() } = {}) {
   return {
+    state,
     now: () => Date.now(),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     sql: (query) => sqlite(copilotHome, query),
