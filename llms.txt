@@ -21,22 +21,28 @@ Shepherd keeps the GitHub Copilot app's sessions as work. Plain ESM, no build st
 - `shepherd status [--json] [--copilot-home <dir>]`: one line per local session.
 - `shepherd restore-history <id> [--json]`: puts back an archived session's compressed history, for a session unarchived by hand.
 - `shepherd watch [--quiet] [--json]`: one pass of the six-hour health watch over the resumed sessions (roster from `<state>/resume-last.json`, state in `<state>/health-watch.json`), then exit. A session that stays broken is reported to the agent with `ouro msg`.
-- `shepherd watch --every <seconds> [--quiet]`: stays resident. Each pass runs the health watch, then the quota balancer's applied tick (only when its config says enabled). Passes never overlap; a duty that throws is logged and the next still runs.
+- `shepherd watch --every <seconds> [--quiet]`: stays resident. Each pass runs the health watch, then the quota balancer's applied tick (only when its config says enabled), then the sidebar tidy (at most every `everyMinutes` in `sidebar.json`, only when enabled). Passes never overlap; a duty that throws is logged and the next still runs.
 - `shepherd watch --status [--json]`: what the health watch is following: healthy, waiting, asked again, broken.
 - `shepherd quota [read|plan|status] [--json]`: each Copilot account's quota; plan is what a tick would do; status is the last applied tick. None changes anything.
+- `shepherd sidebar [plan|apply] [--json]`: which projects the sidebar shows; plan (the default) changes nothing; apply asks the app to show or hide the changed projects and needs `sidebar.json` to say `"enabled": true`.
 - `shepherd install [--dry-run]`: loads `~/Library/LaunchAgents/bot.ouro.shepherd.plist`, which runs `shepherd watch --every 60 --quiet` and is kept alive. `--dry-run` prints the plist and changes nothing.
 - `shepherd help`.
-- Run it without installing: `npx github:ourostack/shepherd#v0.4.0 status --json` (not on npm yet).
-- Exit codes: 0 ok, 1 the app's data could not be read, the history could not be restored, or the agent could not load, 2 usage. Errors are one line.
+- Run it without installing: `npx github:ourostack/shepherd#v0.5.0 status --json` (not on npm yet).
+- Exit codes: 0 ok, 1 the app's data could not be read, the history could not be restored, the agent could not load, or the app refused a sidebar change, 2 usage. Errors are one line.
 
 ## Quota balancing
 
 - `quotaConfig()` reads `~/.config/shepherd/quota.json`; the balancer is off unless it says `"enabled": true`. `quotaTick(deps, { apply })` plans (apply false) or applies a tick; `quotaRead(deps)` reads each account's quota; `quotaStatus()` is the last applied tick; `listenQuota(deps)` keeps the app's quota broadcasts in `~/.config/shepherd/quota-app.json`.
 - Files, each overridable by `SHEPHERD_QUOTA_CONFIG`, `SHEPHERD_QUOTA_STATE`, `SHEPHERD_QUOTA_APP`, `SHEPHERD_QUOTA_WAITING`, `SHEPHERD_QUOTA_LOG`: the state, the waiting list (`waiting-on-operator.quota.json`) and the decision log (`~/Library/Logs/shepherd-quota.jsonl`).
 
+## Sidebar tidy
+
+- `sidebarConfig()` reads `~/.config/shepherd/sidebar.json` (`enabled`, `homes`, `everyMinutes`); off unless `"enabled": true`. `SHEPHERD_SIDEBAR_CONFIG` overrides the file.
+- A project shows when it is a home (its `main_repo_path` is in `homes`) or holds an unarchived session, local or cloud; otherwise it is hidden. `sidebarPlan(projects, sessions, { homes })` is pure; `sidebarTidy(deps, { homes, apply })` reads the app's database and, with apply, sends `set_project_sidebar_visibility` only for projects that change.
+
 ## Rules
 
-- Shepherd is read-only except `sendTo`, `archive`, `compressHistory`, `restoreHistory`, `resume` (its record in the state folder), `watch` (its state folder and the agent notice), `install` (the launch agent) and an applied quota tick (its state, log and waiting files, and the re-pins and messages it decides on, only when its config is enabled). It compresses only archived or unlisted sessions, never a live one. It never quits or relaunches the app; that is Housesitter's job.
+- Shepherd is read-only except `sendTo`, `archive`, `compressHistory`, `restoreHistory`, `resume` (its record in the state folder), `watch` (its state folder and the agent notice), `install` (the launch agent), an applied quota tick (its state, log and waiting files, and the re-pins and messages it decides on, only when its config is enabled) and `sidebarTidy` with apply (the app's show or hide requests, only when `sidebar.json` is enabled). It compresses only archived or unlisted sessions, never a live one. It never quits or relaunches the app; that is Housesitter's job.
 - Every failure says what probably happened and the fix.
 - Tests run against fakes (`test/fake-app.mjs` is a pretend socket). The real database test and CLI status test run only where `/usr/bin/sqlite3` exists.
 - Keep it small. A duty moves here only when a caller needs it.

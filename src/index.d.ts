@@ -220,3 +220,31 @@ export function resume(
   deps: Deps & { heldBack?: (held: { id: string; title: string | null; bytes: number }[]) => void },
   o: { targets: ResumeTarget[]; startedAt: number; restartedAt: number; why?: string | null; lanes?: Map<string, { lanes?: number; minutes?: number | null }>; t?: Partial<ResumeTiming>; log?: (line: string) => void },
 ): Promise<ResumeResult[]>;
+
+/** The sidebar tidy's settings, from sidebar.json (off unless "enabled": true). */
+export interface SidebarConfig {
+  enabled: boolean;
+  /** Absolute paths of the projects' main checkouts that always show. */
+  homes: string[];
+  everyMinutes: number;
+}
+
+export interface SidebarEntry {
+  id: string;
+  name: string | null;
+  home: boolean;
+  sessions: number;
+  show: boolean;
+  why: string;
+  was: boolean;
+  changes: boolean;
+}
+
+/** The sidebar tidy's config, read from sidebar.json (SHEPHERD_SIDEBAR_CONFIG overrides the path). Throws when the file is not valid. */
+export function sidebarConfig(file?: string): SidebarConfig;
+export function sidebarFile(env?: Record<string, string | undefined>, home?: string): string;
+/** Pure: whether each project should show, and why. A project shows when it is a home or holds an unarchived session, local or cloud. */
+export function sidebarPlan(projects: { id: string; name?: string | null; main_repo_path?: string | null; show_in_sidebar?: unknown }[], sessions: { id: string; project_id?: string | null }[], opts?: { homes?: string[] }): SidebarEntry[];
+/** Plans the sidebar from the app's database; apply sends the app a show or hide request for each change only. Never writes the database. */
+export function sidebarTidy(deps: Deps, opts?: { homes?: string[]; apply?: boolean; waitMs?: number }): Promise<{ ok: boolean; applied: boolean; plan: SidebarEntry[]; done: { id: string; name: string | null; show: boolean; ok: boolean; error: string | null }[] }>;
+export function renderSidebar(out: { plan: SidebarEntry[]; done: { id: string; name: string | null; ok: boolean; error: string | null }[] }, opts?: { enabled?: boolean; file?: string }): string;

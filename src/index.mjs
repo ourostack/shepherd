@@ -5,3 +5,4 @@ export { compressHistory, restoreHistory } from './compress.mjs';
 export { LOOKBACK_MS, MAX_HISTORY_BYTES, ROWS, STALE_MS, deps, historyFile, snapshot, stateDir } from './sessions.mjs';
 export { RESUME_T, pickTargets, resume, resumeText } from './resume.mjs';
 export { config as quotaConfig, listen as listenQuota, readAll as quotaRead, status as quotaStatus, tick as quotaTick } from './quota.mjs';
+export { renderSidebar, sidebarConfig, sidebarFile, sidebarPlan, tidy as sidebarTidy } from './sidebar.mjs';
