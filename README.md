@@ -37,28 +37,49 @@ flowchart LR
 | Size watch and hand-off retirement | moving here |
 | Stuck resume, and the six-hour health watch | here now |
 | Billing account and quota | here now |
-| Sidebar tidy | moving here |
+| Sidebar tidy | here now |
 | Waiting-prompt notices | moving here |
 | Delivering Desk's wakes | moving here |
 
 ## CLI
 
 ```sh
-npx github:ourostack/shepherd#v0.4.0 status                # one line per local session
-npx github:ourostack/shepherd#v0.4.0 status --json         # the same as data
-npx github:ourostack/shepherd#v0.4.0 restore-history <id>  # put back an archived session's compressed history
-npx github:ourostack/shepherd#v0.4.0 watch --status        # what the health watch is following
-npx github:ourostack/shepherd#v0.4.0 quota                 # each Copilot account's quota, and the balancer's last tick
-npx github:ourostack/shepherd#v0.4.0 help
+npx github:ourostack/shepherd#v0.5.0 status                # one line per local session
+npx github:ourostack/shepherd#v0.5.0 status --json         # the same as data
+npx github:ourostack/shepherd#v0.5.0 restore-history <id>  # put back an archived session's compressed history
+npx github:ourostack/shepherd#v0.5.0 watch --status        # what the health watch is following
+npx github:ourostack/shepherd#v0.5.0 quota                 # each Copilot account's quota, and the balancer's last tick
+npx github:ourostack/shepherd#v0.5.0 sidebar               # which projects the sidebar shows, and what apply would change
+npx github:ourostack/shepherd#v0.5.0 help
 ```
 
-Read-only except `restore-history`, `watch`, `install` and an applied quota tick (its own state, log and waiting files). `quota read`, `quota plan` and `quota status` change nothing. Exit codes: 0 ok, 1 the app's data could not be read, the history could not be restored, or the agent could not load, 2 usage.
+Read-only except `restore-history`, `watch`, `install`, an applied quota tick and `sidebar apply` (their own state, log and waiting files, and the app's sidebar). `quota read`, `quota plan`, `quota status` and `sidebar` (plan) change nothing. Exit codes: 0 ok, 1 the app's data could not be read, the history could not be restored, the agent could not load, or the app refused a sidebar change, 2 usage.
 
 ## Run it always
 
-`shepherd install` writes `~/Library/LaunchAgents/bot.ouro.shepherd.plist` and loads it. The agent runs `shepherd watch --every 60 --quiet` and is kept alive, so every 60 seconds one pass runs the health watch and then the quota balancer, with no one at a terminal. Its log is `~/Library/Logs/shepherd-watch.launchd.log`. `shepherd install --dry-run` prints the plist and changes nothing.
+`shepherd install` writes `~/Library/LaunchAgents/bot.ouro.shepherd.plist` and loads it. The agent runs `shepherd watch --every 60 --quiet` and is kept alive, so every 60 seconds one pass runs the health watch, then the quota balancer, then the sidebar tidy (at most every `everyMinutes`), with no one at a terminal. Its log is `~/Library/Logs/shepherd-watch.launchd.log`. `shepherd install --dry-run` prints the plist and changes nothing.
 
 The health watch follows each session that a resume sent a message to, for six hours. It asks a silent, erroring or stuck session once more, and tells the agent by name only about a session that stays broken.
+
+## Sidebar tidy
+
+The app's sidebar lists every project, and on an always-on Mac it fills with projects nobody is working in. The rule is simple: a project shows when it is a home (a path listed in the config) or holds at least one unarchived session, local or cloud. Any other project is hidden. Showing and hiding use the app's own reversible request on its socket, and only the changes are sent.
+
+It is off until you configure it. Write `~/.config/shepherd/sidebar.json`:
+
+```json
+{
+  "enabled": true,
+  "homes": ["/Users/you/code/app", "/Users/you/code/tools"],
+  "everyMinutes": 30
+}
+```
+
+- `enabled`: only `true` turns the tidy on. With no file, or `false`, the duty does nothing.
+- `homes`: absolute paths of projects' main checkouts that always show.
+- `everyMinutes`: how often the resident watch applies the tidy (default 30).
+
+`SHEPHERD_SIDEBAR_CONFIG` overrides the file. `shepherd sidebar` (or `plan`) shows what would change and changes nothing; `shepherd sidebar apply` makes the changes now and needs `"enabled": true`.
 
 ## Quota balancing
 
@@ -105,6 +126,7 @@ await archive(d, { ...sessions[0], workspaceType: "worktree" }, { keepWorktree: 
 - `loopState`, `lastTurnAt`, `continuedSince`, `tookTurnSince`, `lastReply`, `readTail`, `READY`, `DEFER`: the pure readers of a session's history.
 - `ShepherdError` carries `code`, `problem` and `fix`; its message reads `<problem>. Fix: <fix>.`
 - `quotaConfig(file?)`, `quotaRead(deps, cfg?)`, `quotaTick(deps, { apply, only, cfg, now })`, `quotaStatus()` and `listenQuota(deps, { log, file, retryMs })`: the quota balancer (see Quota balancing). A tick with `apply` does nothing unless the config says `"enabled": true`.
+- `sidebarConfig(file?)`, `sidebarPlan(projects, sessions, { homes })` (pure) and `sidebarTidy(deps, { homes, apply })`: the sidebar tidy (see Sidebar tidy). `sidebarTidy` reads the database and, with `apply`, sends the app only the show or hide requests that change a project.
 
 Types ship in `src/index.d.ts`.
 

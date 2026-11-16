@@ -99,6 +99,14 @@ test('shepherd watch with nothing to follow says so and exits 0; watch --status 
   }
 });
 
+test('shepherd sidebar: a bad sub-command is a usage error; apply with the config off says how to turn it on', () => {
+  assert.equal(run(['sidebar', 'sweep']).status, 2);
+  assert.match(run(['sidebar', 'sweep']).stderr, /shepherd: usage: sidebar takes plan or apply, not "sweep"\. Fix: shepherd sidebar plan\./);
+  const r = run(['sidebar', 'apply'], { SHEPHERD_SIDEBAR_CONFIG: path.join(os.tmpdir(), 'shepherd-no-sidebar-config.json') });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /^shepherd: sidebar-off: the sidebar tidy is off: .* does not say "enabled": true\. Fix: set "enabled": true and "homes" in .*, then run shepherd sidebar apply\.$/m);
+});
+
 test('shepherd install --dry-run prints the launch agent and writes nothing', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'shepherd-installcli-'));
   try {
