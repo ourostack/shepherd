@@ -65,7 +65,7 @@ await archive(d, { ...sessions[0], workspaceType: "worktree" }, { keepWorktree: 
 
 - `deps({ copilotHome, ledger })`: the app-facing deps (`sql`, `history`, `historySize`, `exchange`, `historyPath`, `gzip`, `gunzip`, `openBy`, `ledger`, `now`, `sleep`). `ledger` defaults to `$SHEPHERD_DISK_LEDGER`, else Housesitter's disk ledger. Tests inject fakes in their place.
 - `snapshot(deps, now?, skip?)`: every local, unarchived session, with `state`, `why` and `workspaceId`.
-- `sendTo(deps, id, prompt, waitMs)`: `{ ok, error }`. A compressed history is restored first.
+- `sendTo(deps, id, prompt, waitMs)`: `{ ok, error }`. A compressed history is restored first, best effort: a restore that can't run never stops the send.
 - `archive(deps, row, { keepWorktree, waitMs, compress })`: `{ ok, error, compressed }`. Once the app confirms and its database shows the session archived, the history is compressed (`compress: false` skips it).
 - `compressHistory(deps, id, { dryRun })` and `restoreHistory(deps, id)`: gzip an archived session's `events.jsonl` (never a live one, never an open one) and gunzip it back. Each compression appends a `history-compressed` row to the disk ledger.
 - `exchange(copilotHome, messages, { done, keep, waitMs })` and `appReady(deps)`: one conversation with the app's socket.
