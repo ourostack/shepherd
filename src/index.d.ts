@@ -94,6 +94,8 @@ export interface Reply {
 }
 
 export interface Deps {
+  /** The GitHub Copilot app's home folder (data.db, session-state, run/, logs/). */
+  copilotHome: string;
   /** Shepherd's own records (the last resume, the health watch): ~/Library/Caches/shepherd by default. */
   state: string;
   now(): number;
@@ -162,6 +164,54 @@ export function sendTo(deps: Deps, id: string, prompt: string, waitMs?: number):
 export function archive(deps: Deps, row: ArchiveRow, opts?: { keepWorktree?: boolean; waitMs?: number; compress?: boolean }): Promise<{ ok: boolean; session_id: string; error: string | null; compressed: CompressResult | null }>;
 export function compressHistory(deps: Deps, id: string, opts?: { dryRun?: boolean }): Promise<CompressResult>;
 export function restoreHistory(deps: Deps, id: string): Promise<RestoreResult>;
+
+/** The balancer's settings, from quota.json (off unless "enabled": true; every other key defaults as shown in src/quota.mjs). */
+export interface QuotaConfig {
+  enabled: boolean;
+  low_pct: number;
+  out_pct: number;
+  tranches: number[];
+  max_moves: number;
+  stall_window_h: number;
+  stale_h: number;
+  listen_ms: number;
+  resume_retry_ms: number;
+  warn_h: number;
+  burn_window_h: number;
+  prefer_unlimited: boolean;
+  respect_user_pins: boolean;
+  resume_window_min: number;
+  exclude: string[];
+  repo_rules: { repo: string | string[]; accounts: string | string[] }[];
+  account_rules: { account: string | string[]; repos: string | string[] }[];
+  share: { gist_id: string; gh_user: string | null } | null;
+  me: string;
+}
+
+export interface QuotaReading {
+  unlimited: boolean;
+  entitlement: number | null;
+  remaining: number | null;
+  /** Percent of included requests left. */
+  pct: number | null;
+  has_quota: boolean | null;
+  overage_permitted: boolean | null;
+  reset: string | null;
+  spent: number | null;
+  source: string;
+  at: string;
+}
+
+/** The balancer's config, read from quota.json (SHEPHERD_QUOTA_CONFIG overrides the path). Throws when the file is not JSON. */
+export function quotaConfig(file?: string): QuotaConfig;
+/** Every signed-in account's reading, from every source (apply is never set here). */
+export function quotaRead(deps: Deps, cfg?: QuotaConfig): Promise<{ readings: Record<string, QuotaReading>; errors: Record<string, string> }>;
+/** One tick. apply false plans and changes nothing; apply true moves projects and messages sessions, and does nothing when the config is off. */
+export function quotaTick(deps: Deps, opts?: { apply?: boolean; only?: string | null; cfg?: QuotaConfig; now?: number }): Promise<Record<string, any>>;
+/** The last applied tick's result, or null. */
+export function quotaStatus(): Record<string, any> | null;
+/** Keeps the app's per-account quota broadcasts in a file; reconnects while the app is down. */
+export function listenQuota(deps: Deps, opts?: { log?: (line: string) => void; file?: string; retryMs?: number }): { stop(): void };
 
 export function pickTargets(o: { before: Snapshot[]; after: Snapshot[]; also?: string[] }): ResumeTarget[];
 export function resumeText(o: { at: number; why?: string | null; lanes?: { lanes?: number; minutes?: number | null } | null }): string;

@@ -105,9 +105,24 @@ test('shepherd install --dry-run prints the launch agent and writes nothing', ()
     const r = run(['install', '--dry-run'], { HOME: home });
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /<key>Label<\/key><string>bot\.ouro\.shepherd<\/string>/);
-    assert.match(r.stdout, /<string>watch<\/string>\s*<string>--quiet<\/string>/);
+    assert.match(r.stdout, /<string>watch<\/string>\s*<string>--every<\/string>\s*<string>60<\/string>\s*<string>--quiet<\/string>/);
     assert.deepEqual(fs.readdirSync(home), []);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('shepherd quota and watch --every: bad arguments are usage errors; quota status says when no tick has run', () => {
+  assert.equal(run(['quota', 'sweep']).status, 2);
+  assert.match(run(['quota', 'sweep']).stderr, /shepherd: usage: quota takes read, plan or status, not "sweep"\. Fix: shepherd quota status\./);
+  assert.equal(run(['watch', '--every', '0']).status, 2);
+  assert.equal(run(['watch', '--every', '60', '--status']).status, 2);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shepherd-quota-cli-'));
+  try {
+    const r = run(['quota', 'status'], { SHEPHERD_QUOTA_STATE: path.join(dir, 'none.json') });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout.trim(), 'no quota tick has run yet');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });

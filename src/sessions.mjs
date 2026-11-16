@@ -59,6 +59,7 @@ function sqlite(copilotHome, query) {
 // The history is compressed with gzip; the disk ledger is a JSON-lines file that Housesitter's disk job also writes to.
 export function deps({ copilotHome = path.join(os.homedir(), '.copilot'), ledger = process.env.SHEPHERD_DISK_LEDGER || path.join(os.homedir(), 'Library', 'Caches', 'housesitter', 'restart-copilot', 'disk-ledger.jsonl'), state = stateDir() } = {}) {
   return {
+    copilotHome,
     state,
     now: () => Date.now(),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),

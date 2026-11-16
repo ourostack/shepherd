@@ -109,6 +109,14 @@ export function tookTurnSince(lines, since) {
   return false;
 }
 
+// The history as it stood at `at` (ms): the lines stamped at or before it. A line with no timestamp is left out.
+export function linesUntil(lines, at) {
+  return lines.filter((l) => {
+    const e = parse(l);
+    return Boolean(e) && Date.parse(e.timestamp || '') <= at;
+  });
+}
+
 // What the session last answered after `since`: { kind: 'ready', at } or { kind: 'defer', at, lanes, minutes }, or null.
 // An answer is a line of its own: READY-TO-RESTART, or DEFER: <n> lanes running, optionally with about <m> min.
 export function lastReply(lines, since) {

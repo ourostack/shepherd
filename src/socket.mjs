@@ -9,17 +9,24 @@ export const ARCHIVE_WAIT_MS = 20000;
 
 const read = (copilotHome, name) => fs.readFileSync(path.join(copilotHome, 'run', name), 'utf8').trim().split(/\s+/)[0];
 
+// The app's observer socket URL, from <home>/run/ws.port and ws.token. Throws when the app is not serving.
+export function socketUrl(copilotHome) {
+  const port = read(copilotHome, 'ws.port');
+  const token = read(copilotHome, 'ws.token');
+  return `ws://127.0.0.1:${port}/?token=${encodeURIComponent(token)}&observer=1`;
+}
+
 // Send `messages`, then collect what the app says until done(message) or waitMs passes. keep filters what is collected.
 export function exchange(copilotHome, messages, { done = () => false, waitMs = 10000, keep = () => true } = {}) {
-  let port, token;
-  try { port = read(copilotHome, 'ws.port'); token = read(copilotHome, 'ws.token'); } catch {
+  let url;
+  try { url = socketUrl(copilotHome); } catch {
     return Promise.resolve([{ type: 'socket_error', message: `no ws.port or ws.token in ${path.join(copilotHome, 'run')}: the app is not serving. Fix: open the GitHub Copilot app and try again.` }]);
   }
   if (typeof WebSocket !== 'function') throw new ShepherdError({ code: 'node-too-old', problem: 'this Node has no global WebSocket', fix: 'run it on Node 22.18 or newer' });
   return new Promise((resolve) => {
     const got = [];
     let ws;
-    try { ws = new WebSocket(`ws://127.0.0.1:${port}/?token=${encodeURIComponent(token)}&observer=1`); } catch { resolve([{ type: 'socket_error' }]); return; }
+    try { ws = new WebSocket(url); } catch { resolve([{ type: 'socket_error' }]); return; }
     let over = false;
     const finish = () => { if (over) return; over = true; clearTimeout(timer); try { ws.close(); } catch { /* closed */ } resolve(got); };
     const timer = setTimeout(finish, waitMs);
