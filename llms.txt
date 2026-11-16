@@ -26,6 +26,7 @@ Shepherd keeps the GitHub Copilot app's sessions as work. Plain ESM, no build st
 - `shepherd quota [read|plan|status] [--json]`: each Copilot account's quota; plan is what a tick would do; status is the last applied tick. None changes anything.
 - `shepherd sidebar [plan|apply] [--json]`: which projects the sidebar shows; plan (the default) changes nothing; apply asks the app to show or hide the changed projects and needs `sidebar.json` to say `"enabled": true`.
 - `shepherd install [--dry-run]`: loads `~/Library/LaunchAgents/bot.ouro.shepherd.plist`, which runs `shepherd watch --every 60 --quiet` and is kept alive. `--dry-run` prints the plist and changes nothing.
+- `shepherd version [--json]` (also `--version`) prints the installed version.
 - `shepherd help`.
 - Run it without installing: `npx github:ourostack/shepherd#v0.5.0 status --json` (not on npm yet).
 - Exit codes: 0 ok, 1 the app's data could not be read, the history could not be restored, the agent could not load, or the app refused a sidebar change, 2 usage. Errors are one line.

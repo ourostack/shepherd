@@ -134,3 +134,9 @@ test('shepherd quota and watch --every: bad arguments are usage errors; quota st
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('shepherd version and --version print the package version; --json prints it as JSON', () => {
+  const { version } = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  for (const v of ['version', '--version']) { const r = run([v]); assert.equal(r.status, 0); assert.equal(r.stdout.trim(), version); }
+  assert.deepEqual(JSON.parse(run(['version', '--json']).stdout), { version });
+});
