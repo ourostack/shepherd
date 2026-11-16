@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ShepherdError } from './error.mjs';
+import { compressHistory, restoreHistory, waitForArchive } from './compress.mjs';
 
 export const ARCHIVE_WAIT_MS = 20000;
 
@@ -35,8 +36,10 @@ export function exchange(copilotHome, messages, { done = () => false, waitMs = 1
 
 export const appReady = async (deps) => (await deps.exchange([], { done: (j) => j.type === 'server_hello', keep: (j) => j.type === 'server_hello', waitMs: 3000 })).some((j) => j.type === 'server_hello');
 
-// Send a prompt to a session; ok when the app queued or sent it.
+// Send a prompt to a session; ok when the app queued or sent it. A session whose history was compressed gets it back first.
 export async function sendTo(deps, id, prompt, waitMs) {
+  const back = await restoreHistory(deps, id);
+  if (!back.ok) return { ok: false, reply: 'history not restored', error: back.why };
   const request_id = randomUUID();
   const got = await deps.exchange([{ type: 'send_message', session_id: id, prompt, delivery_mode: 'immediate', request_id }], {
     keep: (j) => j.request_id === request_id || (j.session_id === id && /message_(sent|queued|delivery)/.test(j.type)) || j.type === 'socket_error',
@@ -54,7 +57,8 @@ export async function sendTo(deps, id, prompt, waitMs) {
 
 // Archive a session row from snapshot or the sessions query. A row with a workspace archives the workspace, and deletes
 // its worktree only when the row says it is one and keepWorktree is not set; a row without one archives the session.
-export async function archive(deps, row, { keepWorktree = false, waitMs = ARCHIVE_WAIT_MS } = {}) {
+// Once the app confirms, the session's history is compressed (after the app's database shows it archived).
+export async function archive(deps, row, { keepWorktree = false, waitMs = ARCHIVE_WAIT_MS, compress = true } = {}) {
   const request_id = randomUUID();
   const workspace = Boolean(row.workspaceId);
   const msg = workspace
@@ -69,9 +73,15 @@ export async function archive(deps, row, { keepWorktree = false, waitMs = ARCHIV
   const got = await deps.exchange([msg], { keep: (j) => verdict(j) !== 'ignore', done: (j) => verdict(j) !== 'ignore', waitMs });
   const hit = got.find((j) => verdict(j) !== 'ignore');
   const ok = hit !== undefined && verdict(hit) === 'ok';
-  return {
+  const out = {
     ok,
     session_id: row.id,
     error: ok ? null : hit ? String(hit.message || hit.type).slice(0, 200) : `the app did not confirm the archive within ${Math.round(waitMs / 1000)} s. Fix: check the session with shepherd status, then try again.`,
+    compressed: null,
   };
+  if (ok && compress) {
+    await waitForArchive(deps, row.id);
+    out.compressed = await compressHistory(deps, row.id);
+  }
+  return out;
 }

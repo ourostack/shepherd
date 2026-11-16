@@ -13,6 +13,8 @@ export const STALE_MS = 24 * 3600000;
 export const LOOKBACK_MS = 24 * 3600000;
 
 const SQLITE = '/usr/bin/sqlite3';
+const GZIP = '/usr/bin/gzip';
+const LSOF = '/usr/sbin/lsof';
 
 export const ROWS = `SELECT s.id, s.title, s.mode, s.is_running AS running, s.was_interrupted AS interrupted, s.execution_location AS loc, w.id AS workspace_id
 FROM sessions s LEFT JOIN workspaces w ON w.session_id = s.id
@@ -52,7 +54,8 @@ function sqlite(copilotHome, query) {
 }
 
 // The app-facing deps: the database (read-only), each session's history, the socket, and the clock. Tests pass fakes instead.
-export function deps({ copilotHome = path.join(os.homedir(), '.copilot') } = {}) {
+// The history is compressed with gzip; the disk ledger is a JSON-lines file that Housesitter's disk job also writes to.
+export function deps({ copilotHome = path.join(os.homedir(), '.copilot'), ledger = process.env.SHEPHERD_DISK_LEDGER || path.join(os.homedir(), 'Library', 'Caches', 'housesitter', 'restart-copilot', 'disk-ledger.jsonl') } = {}) {
   return {
     now: () => Date.now(),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
@@ -63,5 +66,34 @@ export function deps({ copilotHome = path.join(os.homedir(), '.copilot') } = {})
     },
     historySize: (id) => { try { return fs.statSync(historyFile(copilotHome, id)).size; } catch { return 0; } },
     exchange: (messages, opts) => exchange(copilotHome, messages, opts),
+    historyPath: (id) => historyFile(copilotHome, id),
+    gzip: (file) => gzipTool(['-1', file], file),
+    gunzip: (gz) => gzipTool(['-d', gz], gz),
+    openBy: (file) => openFiles(file),
+    ledger: (row) => appendRow(ledger, row),
   };
+}
+
+function gzipTool(args, file) {
+  return new Promise((resolve, reject) => execFile(GZIP, args, { timeout: 600000 }, (err, _out, stderr) => {
+    if (err) reject(new ShepherdError({ code: 'gzip-failed', problem: `gzip could not handle ${file}: ${String(stderr).trim() || err.message}`, fix: 'check the disk has room and nothing else is writing the file, then try again' }));
+    else resolve();
+  }));
+}
+
+// The pids that have the file open. lsof exits 1 with no output when nothing has it open; any other failure rejects.
+function openFiles(file) {
+  return new Promise((resolve, reject) => execFile(LSOF, ['-t', '--', file], { timeout: 30000 }, (err, stdout, stderr) => {
+    if (!err) resolve(String(stdout).split('\n').filter(Boolean));
+    else if (err.code === 1 && !String(stderr).trim()) resolve([]);
+    else reject(err);
+  }));
+}
+
+// A record, not a gate: a write that fails is ignored.
+function appendRow(file, row) {
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.appendFileSync(file, `${JSON.stringify(row)}\n`);
+  } catch { /* the ledger is best effort */ }
 }

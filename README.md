@@ -30,6 +30,7 @@ flowchart LR
 | How big each session's history is | here now |
 | Send a session a message | here now |
 | Archive a session or its workspace | here now |
+| Compress an archived session's history (never a live one; restore-history brings it back) | here now |
 | A safe point before a restart | moving here |
 | Resume after a restart or crash | moving here |
 | The 500 MB resume cap | moving here |
@@ -43,27 +44,30 @@ flowchart LR
 ## CLI
 
 ```sh
-npx github:ourostack/shepherd#v0.1.0 status          # one line per local session
-npx github:ourostack/shepherd#v0.1.0 status --json   # the same as data
-npx github:ourostack/shepherd#v0.1.0 help
+npx github:ourostack/shepherd#v0.2.0 status                # one line per local session
+npx github:ourostack/shepherd#v0.2.0 status --json         # the same as data
+npx github:ourostack/shepherd#v0.2.0 restore-history <id>  # put back an archived session's compressed history
+npx github:ourostack/shepherd#v0.2.0 help
 ```
 
-Read-only. Exit codes: 0 ok, 1 the app's data could not be read, 2 usage.
+Read-only except `restore-history`. Exit codes: 0 ok, 1 the app's data could not be read or the history could not be restored, 2 usage.
 
 ## Library
 
 ```js
 import { deps, snapshot, sendTo, archive } from '@ouro.bot/shepherd';
 
-const d = deps();   // defaults to ~/.copilot: the database, histories, socket and clock
+const d = deps();   // defaults to ~/.copilot: the database, histories, socket, clock and ledger
 const sessions = await snapshot(d);               // [{ id, title, state: 'busy'|'idle', why, workspaceId, ... }]
 await sendTo(d, sessions[0].id, 'carry on', 10000);
 await archive(d, { ...sessions[0], workspaceType: "worktree" }, { keepWorktree: false });
 ```
 
-- `deps({ copilotHome })`: the app-facing deps (`sql`, `history`, `historySize`, `exchange`, `now`, `sleep`). Tests inject fakes in their place.
+- `deps({ copilotHome, ledger })`: the app-facing deps (`sql`, `history`, `historySize`, `exchange`, `historyPath`, `gzip`, `gunzip`, `openBy`, `ledger`, `now`, `sleep`). `ledger` defaults to `$SHEPHERD_DISK_LEDGER`, else Housesitter's disk ledger. Tests inject fakes in their place.
 - `snapshot(deps, now?, skip?)`: every local, unarchived session, with `state`, `why` and `workspaceId`.
-- `sendTo(deps, id, prompt, waitMs)` and `archive(deps, row, { keepWorktree, waitMs })`: `{ ok, error }`.
+- `sendTo(deps, id, prompt, waitMs)`: `{ ok, error }`. A compressed history is restored first.
+- `archive(deps, row, { keepWorktree, waitMs, compress })`: `{ ok, error, compressed }`. Once the app confirms and its database shows the session archived, the history is compressed (`compress: false` skips it).
+- `compressHistory(deps, id, { dryRun })` and `restoreHistory(deps, id)`: gzip an archived session's `events.jsonl` (never a live one, never an open one) and gunzip it back. Each compression appends a `history-compressed` row to the disk ledger.
 - `exchange(copilotHome, messages, { done, keep, waitMs })` and `appReady(deps)`: one conversation with the app's socket.
 - `loopState`, `lastTurnAt`, `continuedSince`, `tookTurnSince`, `lastReply`, `readTail`, `READY`, `DEFER`: the pure readers of a session's history.
 - `ShepherdError` carries `code`, `problem` and `fix`; its message reads `<problem>. Fix: <fix>.`
