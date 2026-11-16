@@ -1,13 +1,13 @@
 // Copilot quota balancer: no session ever stops on "You have exceeded your monthly quota" while any signed-in
 // Copilot account still has premium requests left, and nobody switches accounts by hand.
 //
-//   node quota-balance.mjs read                 each signed-in Copilot account's premium-request quota, from every source
-//   node quota-balance.mjs plan                 what a tick would do now (dry run): moves, resumes, why
-//   node quota-balance.mjs tick [--apply] [--only <project id>]   read, move projects off spent accounts, resume
-//                                               quota-stalled sessions (macd runs `tick --apply` every minute)
-//   node quota-balance.mjs status               the last tick's result
-//   node quota-balance.mjs listen               keep the app's per-account quota broadcasts in a file (macd runs this
-//                                               in-process, so every model call on any account refreshes its reading)
+//   quotaRead     each signed-in Copilot account's premium-request quota, from every source (`shepherd quota read`)
+//   quotaTick     what a tick would do (apply: false, `shepherd quota plan`), or does (apply: true, every minute from
+//                 `shepherd watch --every 60`): read, move projects off spent accounts, resume quota-stalled sessions
+//   quotaStatus   the last tick's result (`shepherd quota status`)
+//   listenQuota   keeps the app's per-account quota broadcasts in a file, so every model call refreshes its reading
+//
+// The balancer does nothing until its config file says "enabled": true. Reads and plans work without it and change nothing.
 //
 // How the GitHub Copilot app bills (as observed, 2026-11-09): every project
 // has a repository account (repo access) and, with Settings > Accounts "separate Copilot account" on, an optional
@@ -18,53 +18,49 @@
 // runtime freezes its identity at spawn; the next message to a session resumes it, same id and history, on the new
 // account. That is the switch: re-pin, then message every session that was stopped (quota error) or evicted (warm).
 //
-// Quota sources, freshest wins, keyed login@host so every Mac agrees:
+// Quota sources, freshest wins, keyed login@host so every machine agrees:
 //   direct     GET https://api.<host>/copilot_internal/user with that account's gh token (what the app's usage view
 //              and VS Code read): quota_snapshots.premium_interactions {entitlement, remaining, percent_remaining}.
 //   app        quota_snapshot_updated broadcasts with account_id on the app's socket (sent after every model call),
-//              kept by `listen` in ~/.config/mac-fleet/quota-app.json. The only source for an account gh has no token
-//              for (ghe-two.example.com ghe-one.example.com). Not `get_account_quota {project_id}`:
-//              on 2026-11-09 (app 1.0.102) it answered the default account's numbers, or a stale cycle's, for projects
-//              billing other accounts.
-//   fleet      the other Macs' readings, from the shared gist (<machine>.quota.txt), when share is configured.
-//   agent      each Ouro agent's own file in that gist (<machine>.<agent>.quota.txt, parseAgentQuota): its readings of
+//              kept by listenQuota in the app file. The only source for an account gh has no token for. Not
+//              `get_account_quota {project_id}`: on app 1.0.102 it answered the default account's numbers, or a stale
+//              cycle's, for projects billing other accounts.
+//   fleet      other machines' readings, from a shared gist (<machine>.quota.txt), when share is configured.
+//   agent      another agent's own file in that gist (<machine>.<agent>.quota.txt, parseAgentQuota): its readings of
 //              the accounts it bills, and its burn, a floor on that account's forecast burn.
 //   error      a session's own 402 quota_exceeded event marks its account spent until a later reading says otherwise.
 //
 // Accounts are the ones signed in to the Copilot app (its accounts table, the consumption page), in the app's own
 // order: default first, then sign-in order. Nothing lists them in config.
-// Policy (config: machines.json defaults.quota_balance, then machines.<me>.quota_balance, over DEFAULTS below):
-//   tranche  the operator, 2026-11-09 18:25: fill each account to 30% used before the next, then 60, then 90, then the last
-//         10% of each. Per project, the cap is the lowest of `tranches` that some account it may bill is still below
+// Policy (config quota.json, then DEFAULTS below):
+//   tranche  fill each account to 30% used before the next, then 60, then 90, then the last 10% of each. Per project, the cap is the lowest of `tranches` that some account it may bill is still below
 //         (trancheCap); it stays on its account until that account reaches the cap, then moves to the first account in
 //         order still below it (pickByTranche)                               -> move when the project is quiet.
 //   out   account spent (has_quota false, <= out_pct, or a newer quota error)  -> move the project now, resume all.
 //   scope the account bills a project its rules forbid                          -> move when the project is quiet.
 // Quiet: no session in the project is working (mid-turn, between turns that asked for tools, or waiting on an async
-// shell or a background agent, as history-state.mjs reads it). A move evicts the project's warm runtimes; an idle one
-// just loads on the new account at its next message, so a quiet move stops nothing (until 2026-11-09 a project with
-// any warm runtime was never balanced, so three busy projects sat on a 29%-left account burning ~10,700
-// requests an hour until the operator re-pinned them by hand at 15:45). Balancing never stops a working session: only a spent
-// account (out, where the 402 has already stopped it) moves while a session works. Any session such a
-// move evicts while it works is resumed by the balancer itself (Housesitter's watcher resumes after an app restart, not after a move).
-//   unlimited  prefer_unlimited (default on; the operator, 2026-11-16): an account whose reading is unlimited (user@github.com,
-//         the operator's GitHub subsidiary enterprise allocation; the consumption page shows "?") bills every project its rules
-//         allow, and the tranches cover only the limited accounts. Off: it comes after every limited one is at 100%.
+// shell or a background agent, as loopState reads it). A move evicts the project's warm runtimes; an idle one just
+// loads on the new account at its next message, so a quiet move stops nothing. Balancing never stops a working session:
+// only a spent account (out, where the 402 has already stopped it) moves while a session works. Any session such a
+// move evicts while it works is resumed by the balancer itself.
+//   unlimited  prefer_unlimited (default on): an account whose reading is unlimited (the consumption page shows "?") bills
+//         every project its rules allow, and the tranches cover only the limited accounts. Off: it comes after every
+//         limited one is at 100%.
 //   pins  a person's pin (the app marks every pin 'user', the balancer's too, so the balancer keeps the pins it set in
 //         its state) is kept unless its account is spent: scope, tranche and unlimited moves leave it alone.
 // Evictions: every re-pin, the balancer's, a person's or another agent's, evicts the project's warm runtimes, and the
 // app logs each one. Each tick reads the app log since the last tick, messages every session an eviction stopped
-// mid-work (history-state.mjs, judged just before its shutdown) to continue, and checks on the next ticks that it took
+// mid-work (loopState, judged just before its shutdown) to continue, and checks on the next ticks that it took
 // a turn, messaging it once more if not. An idle evicted session is left to resume on its next message.
 //   overage  included requests spent but the enterprise allows overage (overage_permitted: the account's enterprise
-//         pays, never the operator): only after every allowed account reaches 100% used (and every unread seated one); a
+//         pays): only after every allowed account reaches 100% used (and every unread seated one); a
 //         project on it moves back to included requests when no turn is running. The flag means "configured",
 //         not "has room" (the app's QuotaWarningBanner), so a 402 on it is remembered as refused until the reset.
 // Forecast: each account's burn (requests an hour, including overage) from the readings of the last 6 hours; for each
 // group of accounts a project may bill, the hours until its included requests run out. A group with no enterprise
 // overage to fall back on, forecast to run dry before the reset within warn_h hours, or a project with nowhere left
-// to go, is listed under "Waiting on the operator" (~/.config/mac-fleet/waiting-on-operator.quota.json, read by ./mac fleet):
-// raising a budget or adding a seat is his (money, people).
+// to go, is listed under "Waiting on the operator" (the waiting file): raising a budget or adding a seat is the person's
+// to do (money, people).
 // Targets are accounts with a known reading that the rules allow, by tranche; an unread seated account only as a last
 // resort before overage.
 // Rules (both must hold): repo_rules {repo, accounts} say which accounts may bill a repository (a project with no
@@ -72,29 +68,36 @@
 // account only for a work organization's). Only the Copilot (billing) account moves; the repository account that pushes is
 // never touched. A move evicts the project's warm runtimes; only a session stopped on quota or evicted mid-turn is
 // messaged to continue (an idle one resumes on its next message, on the new account).
-// Every decision is one JSON line in ~/Library/Logs/quota-balance.jsonl; state in ~/.config/mac-fleet/quota-balance.json.
+// Every decision is one JSON line in the log file; state in the state file. Paths: see paths().
 
 import { spawnSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { stateAt } from './history-state.mjs';
+import { ShepherdError } from './error.mjs';
+import { continuedSince, linesUntil, loopState, tookTurnSince } from './history.mjs';
+import { sendTo, socketUrl } from './socket.mjs';
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const HOME = os.homedir();
-const CHOME = process.env.COPILOT_HOME || path.join(HOME, '.copilot');
-const SSTATE = path.join(CHOME, 'session-state');
-const CFG_DIR = path.join(HOME, '.config/mac-fleet');
-const STATE_FILE = path.join(CFG_DIR, 'quota-balance.json');
-const LOG_FILE = path.join(HOME, 'Library/Logs/quota-balance.jsonl');
-const APP_FILE = path.join(CFG_DIR, 'quota-app.json');
-const WAITING_FILE = path.join(CFG_DIR, 'waiting-on-operator.quota.json');
 const PATHS = `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH || ''}`;
+const SEND_WAIT_MS = 120000;
+const GIST_TTL_MS = 5 * 60000;
 
+// Where the balancer keeps its files: Shepherd's own folders, each overridable by a SHEPHERD_QUOTA_* variable. Read at
+// each call, so a test can point every path at a temp folder.
+export function paths(env = process.env, home = os.homedir()) {
+  const dir = path.join(home, '.config', 'shepherd');
+  return {
+    config: env.SHEPHERD_QUOTA_CONFIG || path.join(dir, 'quota.json'),
+    state: env.SHEPHERD_QUOTA_STATE || path.join(dir, 'quota-balance.json'),
+    app: env.SHEPHERD_QUOTA_APP || path.join(dir, 'quota-app.json'),
+    waiting: env.SHEPHERD_QUOTA_WAITING || path.join(dir, 'waiting-on-operator.quota.json'),
+    log: env.SHEPHERD_QUOTA_LOG || path.join(home, 'Library', 'Logs', 'shepherd-quota.jsonl'),
+  };
+}
+
+// Off until the config file says "enabled": true.
 export const DEFAULTS = {
-  enabled: true,
+  enabled: false,
   low_pct: 5,
   out_pct: 0.5,
   tranches: [30, 60, 90, 100],
@@ -116,40 +119,30 @@ export const DEFAULTS = {
 
 // ---------- config ----------
 
-export function config(file = path.join(HERE, 'machines.json')) {
-  let all = {};
-  try { all = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* single Mac without fleet config */ }
-  const host = (spawnSync('/usr/sbin/scutil', ['--get', 'LocalHostName'], { encoding: 'utf8', timeout: 3000 }).stdout || '').trim().toLowerCase();
-  const [me, m = {}] = Object.entries(all.machines || {}).find(([, v]) => String(v.local_hostname || '').toLowerCase() === host) || [host || 'this-mac', {}];
-  const d = all.defaults || {};
-  const cfg = { ...DEFAULTS, ...(d.quota_balance || {}), ...(m.quota_balance || {}), me };
-  // Sharing defaults to the fleet gist when there is one: each Mac writes <machine>.quota.txt, every Mac reads all.
-  if (cfg.share === null && d.fleet_gist_id) cfg.share = { gist_id: d.fleet_gist_id, gh_user: (d.github_accounts || []).find((a) => a.host === 'github.com')?.login || null };
-  return cfg;
+// quota.json: the DEFAULTS keys, plus share ({gist_id, gh_user}) to read the other machines' readings. No file: off.
+export function config(file = paths().config) {
+  let user = {};
+  try { user = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) {
+    if (e.code !== 'ENOENT') throw new ShepherdError({ code: 'quota-config', problem: `${file} is not valid JSON (${e.message})`, fix: 'fix the file, or delete it to turn the quota balancer off' });
+  }
+  return { ...DEFAULTS, ...user, enabled: user.enabled === true, me: user.me || os.hostname().split('.')[0] };
 }
 
-// ---------- the app's database (read only) ----------
-
-function sql(query) {
-  const db = path.join(CHOME, 'data.db');
-  const r = spawnSync('/usr/bin/sqlite3', ['-readonly', '-json', '-cmd', '.timeout 3000', db, query], { encoding: 'utf8', maxBuffer: 64 << 20, timeout: 15000 });
-  if (r.status !== 0) throw new Error(`sqlite3: ${(r.stderr || r.error?.message || '').trim().slice(0, 300)}`);
-  return r.stdout.trim() ? JSON.parse(r.stdout) : [];
-}
+// ---------- the app's database (read only, through deps.sql) ----------
 
 export const keyOf = (a) => `${a.login}@${a.host}`;
 
-export function appState() {
+export async function appState(d) {
   // The app's own list (Settings > Accounts, the consumption page): default first, then in sign-in order. This is the
-  // tranche order; nothing in machines.json lists accounts.
-  const accounts = sql("SELECT id, login, host, is_default, settings_json FROM accounts WHERE kind = 'github' ORDER BY is_default DESC, created_at, rowid").map((a) => {
+  // tranche order; nothing in the config lists accounts.
+  const accounts = (await d.sql("SELECT id, login, host, is_default, settings_json FROM accounts WHERE kind = 'github' ORDER BY is_default DESC, created_at, rowid")).map((a) => {
     let s = {}; try { s = JSON.parse(a.settings_json || '{}'); } catch { /* keep {} */ }
     return { id: a.id, login: a.login, host: a.host, is_default: Boolean(a.is_default), copilot: s.copilotAccess !== false && s.copilotAppEnabled !== false };
   });
-  const projects = sql('SELECT id, name, github_owner, github_repo, github_account_id, copilot_account_id, copilot_account_source FROM projects');
+  const projects = await d.sql('SELECT id, name, github_owner, github_repo, github_account_id, copilot_account_id, copilot_account_source FROM projects');
   let separate = false;
-  try { const [r] = sql("SELECT value FROM app_state WHERE key = 'copilot-account-settings'"); const v = JSON.parse(r?.value || '{}'); separate = Boolean((v.state || v).separateCopilotAccountEnabled); } catch { /* off */ }
-  const sessions = sql(`SELECT s.id, s.title, s.is_running, s.updated_at,
+  try { const [r] = await d.sql("SELECT value FROM app_state WHERE key = 'copilot-account-settings'"); const v = JSON.parse(r?.value || '{}'); separate = Boolean((v.state || v).separateCopilotAccountEnabled); } catch { /* off */ }
+  const sessions = await d.sql(`SELECT s.id, s.title, s.is_running, s.updated_at,
       COALESCE(w.project_id, (SELECT w2.project_id FROM workspace_side_chats sc JOIN workspaces w2 ON w2.id = sc.workspace_id WHERE sc.session_id = s.id), (SELECT project_id FROM session_account_projects WHERE session_id = s.id)) AS project_id,
       COALESCE(w.name, s.title) AS name
     FROM sessions s LEFT JOIN workspaces w ON w.session_id = s.id AND w.archived_at IS NULL
@@ -173,21 +166,9 @@ export function billingAccount(project, accounts, separate) {
 // ---------- session state: live runtimes and quota stalls ----------
 
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
-export function warm(id) {
-  try { return fs.readdirSync(path.join(SSTATE, id)).some((f) => { const m = f.match(/^inuse\.(\d+)\.lock$/); return m && alive(Number(m[1])); }); } catch { return false; }
-}
-
-function tail(id, bytes = 2 * 1024 * 1024) {
-  const f = path.join(SSTATE, id, 'events.jsonl');
-  let fd;
-  try {
-    fd = fs.openSync(f, 'r');
-    const st = fs.fstatSync(fd);
-    const len = Math.min(st.size, bytes);
-    const buf = Buffer.alloc(len);
-    fs.readSync(fd, buf, 0, len, st.size - len);
-    return { lines: buf.toString('utf8').split('\n').slice(len < st.size ? 1 : 0), mtime: st.mtimeMs };
-  } catch { return null; } finally { if (fd !== undefined) fs.closeSync(fd); }
+// Has a live process of the app this session's runtime open (an inuse lock in its folder)?
+export function warm(d, id) {
+  try { return fs.readdirSync(path.dirname(d.historyPath(id))).some((f) => { const m = f.match(/^inuse\.(\d+)\.lock$/); return m && alive(Number(m[1])); }); } catch { return false; }
 }
 
 // Pure. The last quota error, if nothing has run since: {id, at, code} or null. A user message or a new turn after the
@@ -254,53 +235,30 @@ async function direct(a) {
   } catch (e) { return { error: e.name === 'AbortError' ? 'timeout' : e.message }; } finally { clearTimeout(t); }
 }
 
-function appSocket() {
-  const read = (f) => fs.readFileSync(path.join(CHOME, 'run', f), 'utf8').trim().split(/\r?\n/);
-  const [port, owner] = read('ws.port');
-  const [token] = read('ws.token');
-  if (owner && !alive(Number(owner))) throw new Error('the Copilot app that wrote ws.port is not running');
-  return { port, token };
-}
-
-// Send requests (optional) and collect replies until done() or the wait runs out.
-export function exchange(messages, { done = () => false, waitMs = 10000, keep = () => true } = {}) {
-  let sock;
-  try { sock = appSocket(); } catch (e) { return Promise.resolve([{ type: 'socket_error', message: e.message }]); }
-  return new Promise((resolve) => {
-    const got = [];
-    const ws = new WebSocket(`ws://127.0.0.1:${sock.port}/?token=${encodeURIComponent(sock.token)}&observer=1`);
-    const finish = () => { clearTimeout(t); try { ws.close(); } catch { /* gone */ } resolve(got); };
-    const t = setTimeout(finish, waitMs);
-    ws.addEventListener('open', () => { for (const m of messages) ws.send(JSON.stringify(m)); });
-    ws.addEventListener('message', (e) => { let j; try { j = JSON.parse(String(e.data)); } catch { return; } if (!keep(j)) return; got.push(j); if (done(j, got)) finish(); });
-    ws.addEventListener('error', () => { got.push({ type: 'socket_error' }); finish(); });
-  });
-}
-
 // The listener's file: login@host -> reading, written on every broadcast.
-export function appFileReadings(file = APP_FILE) {
+export function appFileReadings(file = paths().app) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')).readings || {}; } catch { return {}; }
 }
 
-// Resident (macd): hold an observer socket to the app and keep the latest per-account snapshot in APP_FILE. Reconnects
-// every 30 s while the app is down or restarting. Returns { stop }.
-export function listen({ log = () => {}, file = APP_FILE, retryMs = 30000 } = {}) {
+// Resident (watch --every): hold an observer socket to the app and keep the latest per-account snapshot in the app file.
+// Reconnects every 30 s while the app is down or restarting. Returns { stop }.
+export function listen(d, { log = () => {}, file = paths().app, retryMs = 30000 } = {}) {
   let ws = null;
   let stopped = false;
   let timer = null;
   let byId = new Map();
-  const refreshAccounts = () => { try { byId = new Map(appState().accounts.map((a) => [a.id, a])); } catch { /* app db busy */ } };
+  const refreshAccounts = async () => { try { byId = new Map((await appState(d)).accounts.map((a) => [a.id, a])); } catch { /* app db busy */ } };
   const again = () => { if (!stopped) { clearTimeout(timer); timer = setTimeout(open, retryMs); } };
-  const open = () => {
+  const open = async () => {
     if (stopped) return;
-    let sock;
-    try { sock = appSocket(); } catch { return again(); }
-    refreshAccounts();
-    try { ws = new WebSocket(`ws://127.0.0.1:${sock.port}/?token=${encodeURIComponent(sock.token)}&observer=1`); } catch { return again(); }
-    ws.addEventListener('message', (e) => {
+    let url;
+    try { url = socketUrl(d.copilotHome); } catch { return again(); }
+    await refreshAccounts();
+    try { ws = new WebSocket(url); } catch { return again(); }
+    ws.addEventListener('message', async (e) => {
       let j; try { j = JSON.parse(String(e.data)); } catch { return; }
       if (j.type !== 'quota_snapshot_updated' || !j.account_id) return;
-      if (!byId.has(j.account_id)) refreshAccounts();
+      if (!byId.has(j.account_id)) await refreshAccounts();
       const a = byId.get(j.account_id);
       const n = normalize(j.snapshots?.premium_interactions, { source: 'app', at: new Date().toISOString() });
       if (!a || !n) return;
@@ -319,9 +277,9 @@ export function listen({ log = () => {}, file = APP_FILE, retryMs = 30000 } = {}
   return { stop: () => { stopped = true; clearTimeout(timer); try { ws?.close(); } catch { /* gone */ } } };
 }
 
-async function appBroadcasts(accounts, ms) {
+async function appBroadcasts(d, accounts, ms) {
   if (!ms) return {};
-  const got = await exchange([], { waitMs: ms, keep: (j) => j.type === 'quota_snapshot_updated' && j.account_id });
+  const got = await d.exchange([], { waitMs: ms, keep: (j) => j.type === 'quota_snapshot_updated' && j.account_id });
   const by = new Map(accounts.map((a) => [a.id, a]));
   const out = {};
   for (const j of got) {
@@ -339,6 +297,8 @@ function shareToken(share) {
   return r.status === 0 ? r.stdout.trim() : null;
 }
 
+const gistCache = new Map();
+
 async function gistFetch(share, method = 'GET', body) {
   const token = shareToken(share);
   if (!token) throw new Error('no github.com gh token for the share gist');
@@ -348,16 +308,21 @@ async function gistFetch(share, method = 'GET', body) {
     if (!r.ok) throw new Error(`gist ${method} HTTP ${r.status}`);
     return { status: r.status, etag: r.headers.get('etag'), body: method === 'GET' ? await r.json() : null };
   };
-  // Reads come from a copy at most 5 minutes old (gist-cache.mjs): the tick runs every minute, and gist reads are
-  // limited per token. Other Macs' shares change at most every 10 minutes and agent readings are trusted for 6 h.
-  if (method === 'GET') return (await (await import('./gist-cache.mjs')).cachedGet(share.gist_id, once)).body;
+  // Reads come from a copy at most 5 minutes old: the tick runs every minute, and gist reads are limited per token.
+  // Other machines' shares change at most every 10 minutes and agent readings are trusted for 6 h.
+  if (method === 'GET') {
+    const hit = gistCache.get(share.gist_id);
+    if (hit && Date.now() - hit.at < GIST_TTL_MS) return hit.body;
+    const r = await once(hit?.etag);
+    const next = r.status === 304 ? { ...hit, at: Date.now() } : { at: Date.now(), etag: r.etag, body: r.body };
+    gistCache.set(share.gist_id, next);
+    return next.body;
+  }
   return (await once()).body;
 }
 
-// Pure. An agent's own file in the fleet gist, <machine>.<agent>.quota.txt (Ouroboros, Housesitter: whatever Copilot
-// accounts it bills). Content: {machine, agent, at, readings: [Reading]}, Reading = {key: "login@host", leftPct,
-// burnPerH, dryAt, overageOk, at} plus optional remaining, entitlement, reset (ourostack/ouroboros fleet-readings.ts
-// publishes and reads the same shape). Returns {machine, agent, at, readings: login@host -> reading, burn: login@host
+// Pure. An agent's own file in the fleet gist, <machine>.<agent>.quota.txt (any agent that bills Copilot accounts). Content: {machine, agent, at, readings: [Reading]}, Reading = {key: "login@host", leftPct,
+// burnPerH, dryAt, overageOk, at} plus optional remaining, entitlement, reset. Returns {machine, agent, at, readings: login@host -> reading, burn: login@host
 // -> requests an hour}, or null when the name or content is not an agent file.
 export function parseAgentQuota(name, content) {
   const m = String(name).match(/^([^.]+)\.([^.]+)\.quota\.txt$/);
@@ -378,7 +343,7 @@ export function parseAgentQuota(name, content) {
   return { machine: m[1], agent: m[2], at: j?.at || null, readings, burn };
 }
 
-// Pure. Agent burn per account from fresh agent files: login@host -> {per_h, agents: ["mac-b.ouroboros", ...]}.
+// Pure. Agent burn per account from fresh agent files: login@host -> {per_h, agents: ["machine.agent", ...]}.
 export function agentBurn(agents, { now = Date.now(), windowH = 6 } = {}) {
   const out = {};
   for (const a of agents || []) {
@@ -431,12 +396,12 @@ export function combine(prev, fleet, app, directs, { now = Date.now(), staleH = 
   return out;
 }
 
-export async function read(st, cfg, prev = {}) {
+export async function read(d, st, cfg, prev = {}, fetchDirect = direct) {
   const want = st.accounts.filter((a) => a.copilot);
   const errors = {};
   const directs = {};
-  await Promise.all(want.map(async (a) => { const r = await direct(a); if (r?.error) errors[keyOf(a)] = r.error; else if (r) directs[keyOf(a)] = r; }));
-  const app = merge(appFileReadings(), await appBroadcasts(st.accounts, cfg.listen_ms));
+  await Promise.all(want.map(async (a) => { const r = await fetchDirect(a); if (r?.error) errors[keyOf(a)] = r.error; else if (r) directs[keyOf(a)] = r; }));
+  const app = merge(appFileReadings(), await appBroadcasts(d, st.accounts, cfg.listen_ms));
   let fleet = {};
   let agents = [];
   if (cfg.share?.gist_id) { try { ({ readings: fleet, agents } = await fleetReadings(cfg.share, cfg.me)); } catch (e) { errors.share = e.message; } }
@@ -470,9 +435,8 @@ export function allowed(project, acct, cfg) {
   return byRepo.every((r) => anyOf(r.accounts).some((k) => glob(k).test(key))) && byAcct.every((r) => anyOf(r.repos).some((x) => glob(x).test(repo)));
 }
 
-// ---------- tranches (pure; ourostack/ouroboros chooseAccount mirrors these) ----------
-// the operator, 2026-11-09 18:25: "first get to 30% usage on first account before switching to next one, then 60, then 90, then
-// squeeze final 10 out of each. same should be done for ghcp agents :) across the board".
+// ---------- tranches (pure) ----------
+// Fill the first account to 30% used, then the next, then 60, 90, and the last 10% of each.
 
 export const TRANCHES = [30, 60, 90, 100];
 
@@ -522,8 +486,7 @@ export function pinsFromLog(lines) {
 }
 
 // Pure. st: appState(); readings: login@host -> reading; live: session id -> {warm, running, stall}.
-// Unlimited (prefer_unlimited, on by default; the operator, 2026-11-16, of user@github.com: "this last bucket on the
-// list, which does not have a limit ... should optionally prefer it"): a project bills an unlimited account its rules
+// Unlimited (prefer_unlimited, on by default): a project bills an unlimited account its rules
 // allow, and the tranches cover only the limited accounts. With prefer_unlimited off, the unlimited account comes after
 // every limited one is at 100% used, before enterprise overage. A person's pin (userPinned) is kept unless its account
 // is spent.
@@ -582,8 +545,7 @@ export function plan(st, readings, live, cfg, { now = Date.now(), refused = {}, 
     ];
     const hoursLeft = burn[keyOf(cur)]?.hours_left;
     // A working session is never moved; it moves once its project is quiet. Only a spent account moves under one: its
-    // 402 has already stopped the turn. A person's pin moves only then too (2026-11-16 07:25: a scope move took the operator's
-    // own pins off user@github.com).
+    // 402 has already stopped the turn. A person's pin moves only then too.
     let why = null;
     if (h === 'out') why = 'out';
     else if (pinned) why = null;
@@ -605,8 +567,7 @@ export function plan(st, readings, live, cfg, { now = Date.now(), refused = {}, 
     }
   }
   // Remote steering resolves the repository with the billing account, on that account's host, so a repository billed
-  // from another host cannot be steered remotely (2026-11-09: an app sessions "could not resolve an-org/an-app.
-  // Logged in as https://ghe-two.example.com"). The app has no per-session account; reported, not acted on.
+  // from another host cannot be steered remotely. The app has no per-session account; reported, not acted on.
   const remoteOff = st.projects.filter((p) => {
     const host = st.accounts.find((a) => a.id === p.github_account_id)?.host;
     const bill = moves.find((m) => m.project_id === p.id && m.to_id)?.to_id ?? billingAccount(p, st.accounts, st.separate)?.id;
@@ -617,7 +578,7 @@ export function plan(st, readings, live, cfg, { now = Date.now(), refused = {}, 
   const defH = def ? hp(def) : null;
   const unprojected = st.sessions.filter((s) => !s.project_id && live[s.id]?.warm).length;
   const notes = [];
-  if (remoteOff.length) notes.push(`remote steering is off for ${remoteOff.map((p) => p.name).join(', ')}: each bills an account on a different host than its repository; local steering (./mac sessions send) still works`);
+  if (remoteOff.length) notes.push(`remote steering is off for ${remoteOff.map((p) => p.name).join(', ')}: each bills an account on a different host than its repository; local steering still works`);
   // A GitHub Sandbox (cloud session) is provisioned with, and bound to, the project's repository account
   // (as observed), not its pinned Copilot account, so
   // no re-pin steers it. Reported so cloud lanes are started locally while that account is spent.
@@ -649,7 +610,7 @@ export function burnRate(history, { now = Date.now(), windowH = 6 } = {}) {
 
 // Pure. Per account: burn and hours until its included requests run out at that burn.
 // agents: agentBurn() of the agents' own files. An account's counter already includes its agents' requests, so their
-// burn is a floor, never added on top: it counts when this Mac has no burn of its own for the account (no history yet,
+// burn is a floor, never added on top: it counts when this machine has no burn of its own for the account (no history yet,
 // or only the app's broadcasts, which go quiet while only an agent bills it) or sees less than the agents report.
 export function forecast(history, readings, { now = Date.now(), windowH = 6, agents = {} } = {}) {
   const out = {};
@@ -666,7 +627,7 @@ export function forecast(history, readings, { now = Date.now(), windowH = 6, age
 const fmtH = (h) => (h == null ? '?' : h === Infinity ? 'never' : h >= 48 ? `${Math.round(h / 24)} days` : `${Math.round(h)} h`);
 
 // Pure. For each set of accounts some project may bill: included requests left, the burn on those accounts, hours to
-// dry, and whether enterprise overage is there to fall back on. alert: a sentence for the operator, or null.
+// dry, and whether enterprise overage is there to fall back on. alert: a sentence for the person, or null.
 export function groupRunway(st, readings, burn, cfg, { now = Date.now(), hp, accounts }) {
   const groups = new Map();
   for (const p of st.projects) {
@@ -700,9 +661,9 @@ export function groupRunway(st, readings, burn, cfg, { now = Date.now(), hp, acc
 
 // ---------- acting ----------
 
-function readState() { try { return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); } catch { return { readings: {}, resumed: {}, last: null }; } }
-function writeState(s) { fs.mkdirSync(CFG_DIR, { recursive: true }); fs.writeFileSync(STATE_FILE + '.new', JSON.stringify(s, null, 1)); fs.renameSync(STATE_FILE + '.new', STATE_FILE); }
-function logLine(o) { try { fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true }); fs.appendFileSync(LOG_FILE, JSON.stringify({ at: new Date().toISOString(), ...o }) + '\n'); } catch { /* log is best effort */ } }
+function readState() { try { return JSON.parse(fs.readFileSync(paths().state, 'utf8')); } catch { return { readings: {}, resumed: {}, last: null }; } }
+function writeState(s) { const f = paths().state; fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f + '.new', JSON.stringify(s, null, 1)); fs.renameSync(f + '.new', f); }
+function logLine(o) { try { const f = paths().log; fs.mkdirSync(path.dirname(f), { recursive: true }); fs.appendFileSync(f, JSON.stringify({ at: new Date().toISOString(), ...o }) + '\n'); } catch { /* log is best effort */ } }
 
 export const resumePrompt = (why, from, to, cap) => why === 'quota-only'
   ? `[quota-balance] Your last turn stopped with "You have exceeded your monthly quota" on ${from}. This project now bills ${to}, which has premium requests left. Continue exactly where you left off: redo the step that failed, and re-check anything that was in flight before relying on it.`
@@ -710,35 +671,25 @@ export const resumePrompt = (why, from, to, cap) => why === 'quota-only'
     ? `[quota-balance] This project's Copilot account was switched (at ${from}), so the app stopped your runtime while you were working and will restart it on the new account; your history is intact. Continue exactly where you left off. Anything that was in flight or running in the background (a shell command, a detector or watcher, a subagent, a push) was stopped: re-check its real state and restart it if it is still needed.`
   : `[quota-balance] This project's Copilot account was switched from ${from} to ${to} (${why === 'out' ? `${from} ran out of premium requests` : why === 'tranche' ? `${from} reached the ${cap}% usage tranche; accounts fill in turn to 30, 60, 90, then 100% used` : why === 'unlimited' ? `${to} has no premium-request limit` : why === 'scope' ? `${from} may not bill this repository` : why === 'included' ? `${to} has included premium requests left; ${from} was spending enterprise overage` : `${to} has far more premium requests left`}), so the app restarted your runtime on the new account; your history is intact. Continue exactly where you left off. Anything that was in flight or running in the background (a shell command, a detector or watcher, a subagent, a push) was stopped: re-check its real state and restart it if it is still needed.`;
 
-async function setAccount(projectId, accountId) {
-  const got = await exchange([{ type: 'set_project_copilot_account', project_id: projectId, account_id: accountId }], {
+async function setAccount(d, projectId, accountId) {
+  const got = await d.exchange([{ type: 'set_project_copilot_account', project_id: projectId, account_id: accountId }], {
     keep: (j) => (j.type === 'project_updated' && j.project?.id === projectId) || j.type === 'error' || j.type === 'socket_error',
     done: (j) => j.type !== 'error' || /copilot account/i.test(j.message || ''),
     waitMs: 8000,
   });
-  const [row] = sql(`SELECT copilot_account_id FROM projects WHERE id = '${String(projectId).replace(/[^\w-]/g, '')}'`);
+  const [row] = await d.sql(`SELECT copilot_account_id FROM projects WHERE id = '${String(projectId).replace(/[^\w-]/g, '')}'`);
   const err = got.find((j) => j.type === 'error' && /copilot account/i.test(j.message || ''));
   return { ok: row?.copilot_account_id === accountId && !err, reply: got.at(-1)?.type || 'no reply', error: err?.message || got.find((j) => j.type === 'socket_error')?.message || null };
 }
 
-async function send(id, text) {
-  const request_id = randomUUID();
-  const got = await exchange([{ type: 'send_message', session_id: id, prompt: text, delivery_mode: 'immediate', request_id }], {
-    keep: (j) => j.request_id === request_id || (j.session_id === id && /message_(sent|queued|delivery)/.test(j.type)) || j.type === 'socket_error',
-    done: (j) => /^(session_message_sent|session_message_queued|session_message_delivery_unknown|error|socket_error)$/.test(j.type),
-    // An evicted session loads first; closing the socket before the app answers cancels the send (sessions-local.mjs).
-    waitMs: 120000,
-  });
-  const last = got.at(-1);
-  return { ok: Boolean(last && /session_message_(sent|queued)/.test(last.type)), reply: last?.type || 'no reply', error: last?.type === 'error' ? String(last.message).slice(0, 200) : null };
-}
+// Sends a prompt through the app's socket; a session that is not loaded loads first (sendTo waits for that).
+const send = (d, id, text) => sendTo(d, id, text, SEND_WAIT_MS);
 
 // ---------- evictions: every re-pin, the balancer's or anyone's, stops the project's warm runtimes ----------
 // The app logs each one ("evicted warm session so it re-resolves the project-linked account session_id=… project_id=…"). A runtime evicted while its agent loop was working is told to continue; an
-// idle one resumes on its next message. 2026-11-16 15:32Z: a coordinator session re-pinned its own project mid-turn
-// and sat stopped until the operator noticed.
+// idle one resumes on its next message. The app's runtime restart after a re-pin is what makes this possible.
+// A coordinator session that re-pinned its own project mid-turn would otherwise sit stopped until someone noticed.
 
-const APP_LOGS = path.join(CHOME, 'logs');
 const EVICT = 'evicted warm session so it re-resolves the project-linked account';
 
 // Pure. App log text -> [{at, session_id, project_id}].
@@ -755,7 +706,7 @@ export function parseEvictions(text) {
 
 // The app's log since the cursor {ino, offset}: the newest github-app.*.log, plus the rest of the file the cursor was in
 // when the app rotated it. Without a cursor, the last 8 MB (about the last 15 minutes). Whole lines only.
-export function readAppLog(cursor, { dir = APP_LOGS, maxBytes = 16 << 20, firstBytes = 8 << 20 } = {}) {
+export function readAppLog(cursor, { dir, maxBytes = 16 << 20, firstBytes = 8 << 20 } = {}) {
   let files = [];
   try {
     files = fs.readdirSync(dir).filter((f) => /^github-app\.\d+(\.\d+)?\.log$/.test(f)).map((f) => { const p = path.join(dir, f); const s = fs.statSync(p); return { p, ino: s.ino, size: s.size, mtime: s.mtimeMs }; });
@@ -795,19 +746,9 @@ export function evictedWork(lines, at) {
     const t = Date.parse(e.timestamp);
     if (e.type === 'session.shutdown' && t <= t0 + 1000 && t > t0 - 60000) T = Math.min(T, t - 1);
   }
-  const s = stateAt(lines, T);
-  return { resume: s.working && s.postUser === 0 && s.postTurn === 0, working: s.working, continued: s.postUser + s.postTurn > 0, why: s.why };
-}
-
-// Pure. Has the session started a turn since `at`?
-export function tookTurn(lines, at) {
-  const t0 = Date.parse(at);
-  for (const l of lines) {
-    if (!l || !l.includes('"assistant.turn_start"')) continue;
-    const m = l.match(/"timestamp":"([^"]+)"/);
-    if (m && Date.parse(m[1]) > t0) return true;
-  }
-  return false;
+  const s = loopState(linesUntil(lines, T));
+  const continued = continuedSince(lines, T) || tookTurnSince(lines, T);
+  return { resume: s.working && !continued, working: s.working, continued, why: s.why };
 }
 
 // Pure. Which logged evictions need a resume message: one per session, inside the window, not already messaged since
@@ -830,26 +771,27 @@ export function evictionResumes(evictions, historyOf, { now = Date.now(), window
   return out;
 }
 
-function liveOf(st, now) {
+function liveOf(d, st, now) {
   const live = {};
   const since = now - 14 * 86400000;
   for (const s of st.sessions) {
     if (Date.parse(s.updated_at || 0) < since && !s.is_running) continue;
-    const t = tail(s.id);
-    const w = warm(s.id);
-    live[s.id] = { warm: w, running: Boolean(s.is_running), working: Boolean(w && t && stateAt(t.lines, now).working), stall: t ? quotaStall(t.lines) : null };
+    const { lines } = d.history(s.id);
+    const w = warm(d, s.id);
+    live[s.id] = { warm: w, running: Boolean(s.is_running), working: Boolean(w && loopState(linesUntil(lines, now)).working), stall: quotaStall(lines) };
   }
   return live;
 }
 
-export async function tick({ apply = false, only = null, cfg = config(), now = Date.now() } = {}) {
-  if (!cfg.enabled) return { ok: true, disabled: true };
+export async function tick(d, { apply = false, only = null, cfg = config(), now = Date.now(), fetchDirect = direct } = {}) {
+  // Off means off: nothing is moved, resumed or written without enabled: true. A plan (apply false) still reads, and changes nothing.
+  if (apply && !cfg.enabled) return { ok: true, disabled: true, applied: false };
   const state = readState();
   state.resumed ||= {};
-  const st = appState();
-  const { readings, own, agents, errors } = await read(st, cfg, state.readings);
-  const live = liveOf(st, now);
-  const history = (id) => tail(id)?.lines || null;
+  const st = await appState(d);
+  const { readings, own, agents, errors } = await read(d, st, cfg, state.readings, fetchDirect);
+  const live = liveOf(d, st, now);
+  const history = (id) => d.history(id).lines;
   // Burn history: one sample per account per 5 minutes, from this Mac's own readings, kept for burn_window_h.
   state.history ||= {};
   for (const [k, r] of Object.entries(readings)) {
@@ -863,7 +805,7 @@ export async function tick({ apply = false, only = null, cfg = config(), now = D
   state.refused ||= {};
   for (const [k, at] of Object.entries(state.refused)) { const r = readings[k]; if ((r && r.pct > cfg.out_pct && Date.parse(r.at) > Date.parse(at)) || now - Date.parse(at) > 31 * 86400000 || (r?.reset && now > Date.parse(r.reset) && Date.parse(at) < Date.parse(r.reset))) delete state.refused[k]; }
   // The pins this balancer set, so a person's pin is told apart (userPinned); seeded once from the decision log.
-  if (!state.pins) { try { state.pins = pinsFromLog(fs.readFileSync(LOG_FILE, 'utf8').split('\n')); } catch { state.pins = {}; } }
+  if (!state.pins) { try { state.pins = pinsFromLog(fs.readFileSync(paths().log, 'utf8').split('\n')); } catch { state.pins = {}; } }
   const p = plan(st, readings, live, cfg, { now, refused: state.refused, burn, keeperResumes: false, ownPins: state.pins });
   Object.assign(state.refused, p.refused);
   // --only <project id>: act on one project (a proof or a manual nudge); the plan for the rest is still shown.
@@ -871,14 +813,14 @@ export async function tick({ apply = false, only = null, cfg = config(), now = D
   const done = { moved: [], resumed: [] };
   if (apply) {
     for (const m of p.moves.filter((x) => x.to_id)) {
-      const r = await setAccount(m.project_id, m.to_id);
+      const r = await setAccount(d, m.project_id, m.to_id);
       logLine({ act: 'move', ...m, resume: m.resume.map((s) => s.id), result: r });
       done.moved.push({ project: m.project, from: m.from, to: m.to, why: m.why, ok: r.ok, error: r.error });
       if (!r.ok) continue;
       state.pins[m.project_id] = m.to_id;
       for (const s of m.resume) {
         const why = s.reason === 'quota' && m.why !== 'out' ? 'quota-only' : m.why;
-        const x = await send(s.id, resumePrompt(why, m.from, m.to, m.cap));
+        const x = await send(d, s.id, resumePrompt(why, m.from, m.to, m.cap));
         const stallId = live[s.id]?.stall?.id || null;
         state.resumed[s.id] = { at: new Date().toISOString(), error_id: stallId, ok: x.ok, tries: 1, why: m.why, verify: x.ok };
         logLine({ act: 'resume', session: s.id, name: s.name, reason: s.reason, result: x });
@@ -888,17 +830,17 @@ export async function tick({ apply = false, only = null, cfg = config(), now = D
     for (const r of p.resumes) {
       const prior = state.resumed[r.id];
       if (prior && prior.error_id === r.error_id && (prior.tries >= 2 || now - Date.parse(prior.at) < cfg.resume_retry_ms)) continue;
-      const x = await send(r.id, resumePrompt('quota-only', 'the account it was billing then', r.account));
+      const x = await send(d, r.id, resumePrompt('quota-only', 'the account it was billing then', r.account));
       state.resumed[r.id] = { at: new Date().toISOString(), error_id: r.error_id, ok: x.ok, tries: (prior?.error_id === r.error_id ? prior.tries : 0) + 1, why: 'quota', verify: x.ok };
       logLine({ act: 'resume', session: r.id, name: r.name, reason: 'quota (account already healthy)', account: r.account, result: x });
       done.resumed.push({ id: r.id, name: r.name, reason: 'quota', ok: x.ok, error: x.error });
     }
     // Every re-pin since the last tick, this tick's moves included: resume each session it stopped mid-work.
-    const log = readAppLog(state.evict_cursor);
+    const log = readAppLog(state.evict_cursor, { dir: path.join(d.copilotHome, 'logs') });
     state.evict_cursor = log.cursor;
     for (const ev of evictionResumes(parseEvictions(log.text), history, { now: Date.now(), windowMin: cfg.resume_window_min, resumed: state.resumed })) {
       const name = st.sessions.find((x) => x.id === ev.session_id)?.name || null;
-      const x = await send(ev.session_id, resumePrompt('evicted', ev.at.slice(11, 19) + 'Z'));
+      const x = await send(d, ev.session_id, resumePrompt('evicted', ev.at.slice(11, 19) + 'Z'));
       state.resumed[ev.session_id] = { at: new Date().toISOString(), evicted_at: ev.at, ok: x.ok, tries: 1, why: 'evicted', verify: x.ok };
       logLine({ act: 'resume', session: ev.session_id, name, reason: `evicted mid-work by a re-pin at ${ev.at} (${ev.why})`, project_id: ev.project_id, result: x });
       done.resumed.push({ id: ev.session_id, name, reason: 'evicted', ok: x.ok, error: x.error });
@@ -907,10 +849,10 @@ export async function tick({ apply = false, only = null, cfg = config(), now = D
     for (const [id, v] of Object.entries(state.resumed)) {
       if (!v.verify) continue;
       const lines = history(id);
-      if (lines && tookTurn(lines, v.at)) { v.verify = false; v.verified_at = new Date().toISOString(); logLine({ act: 'resume-verified', session: id, why: v.why, sent_at: v.at }); continue; }
+      if (lines && tookTurnSince(lines, Date.parse(v.at))) { v.verify = false; v.verified_at = new Date().toISOString(); logLine({ act: 'resume-verified', session: id, why: v.why, sent_at: v.at }); continue; }
       if (Date.now() - Date.parse(v.at) < cfg.resume_retry_ms) continue;
       if (v.why === 'evicted' && v.tries < 2) {
-        const x = await send(id, resumePrompt('evicted', (v.evicted_at || v.at).slice(11, 19) + 'Z'));
+        const x = await send(d, id, resumePrompt('evicted', (v.evicted_at || v.at).slice(11, 19) + 'Z'));
         Object.assign(v, { at: new Date().toISOString(), ok: x.ok, tries: v.tries + 1, verify: x.ok });
         logLine({ act: 'resume', session: id, reason: 'evicted: no turn after the first message, sent again', result: x });
         done.resumed.push({ id, name: null, reason: 'evicted (again)', ok: x.ok, error: x.error });
@@ -921,14 +863,14 @@ export async function tick({ apply = false, only = null, cfg = config(), now = D
     state.pin_logged ||= {};
     for (const x of p.pins) if (state.pin_logged[x.project_id] !== x.account) { state.pin_logged[x.project_id] = x.account; logLine({ act: 'user-pin', ...x, decision: x.health === 'out' ? 'move: spent' : 'keep' }); }
   } else {
-    const log = readAppLog(state.evict_cursor);
+    const log = readAppLog(state.evict_cursor, { dir: path.join(d.copilotHome, 'logs') });
     p.evicted = evictionResumes(parseEvictions(log.text), history, { now, windowMin: cfg.resume_window_min, resumed: state.resumed || {} });
   }
   state.readings = readings;
   if (apply && cfg.share?.gist_id && Object.keys(own).length) {
     const sig = JSON.stringify(Object.fromEntries(Object.entries(own).map(([k, v]) => [k, Math.round(v.pct)])));
     // At most one write every 10 minutes when the rounded readings change, and every 30 minutes regardless: gist writes
-    // share one 100-an-hour budget per GitHub account with the heartbeats, the KVM's outbox and the agents' peer link.
+    // share one 100-an-hour budget per GitHub account with every other gist writer.
     const since = now - Date.parse(state.shared_at || 0);
     if ((sig !== state.shared_sig && since >= 10 * 60000) || since > 30 * 60000) {
       try {
@@ -939,25 +881,27 @@ export async function tick({ apply = false, only = null, cfg = config(), now = D
   }
   if (apply) {
     try {
-      const prev = JSON.parse(fs.readFileSync(WAITING_FILE, 'utf8'));
+      const prev = JSON.parse(fs.readFileSync(paths().waiting, 'utf8'));
       const prevAt = new Map((prev.items?.[0]?.items || []).map((i) => [i.sentence.split(' run out in ')[0].split(' is stuck on ')[0], i.since]));
       for (const w of p.waiting) w.since = prevAt.get(w.sentence.split(' run out in ')[0].split(' is stuck on ')[0]) || new Date(now).toISOString();
     } catch { for (const w of p.waiting) w.since = new Date(now).toISOString(); }
-    fs.mkdirSync(CFG_DIR, { recursive: true });
-    fs.writeFileSync(WAITING_FILE + '.new', JSON.stringify({ updated_at: new Date(now).toISOString(), machine: cfg.me, items: p.waiting.length ? [{ machine: cfg.me, session_id: 'quota-balance', name: 'Copilot quota', since: p.waiting[0].since, items: p.waiting }] : [] }, null, 1));
-    fs.renameSync(WAITING_FILE + '.new', WAITING_FILE);
+    const waitingFile = paths().waiting;
+    fs.mkdirSync(path.dirname(waitingFile), { recursive: true });
+    fs.writeFileSync(waitingFile + '.new', JSON.stringify({ updated_at: new Date(now).toISOString(), machine: cfg.me, items: p.waiting.length ? [{ machine: cfg.me, session_id: 'quota-balance', name: 'Copilot quota', since: p.waiting[0].since, items: p.waiting }] : [] }, null, 1));
+    fs.renameSync(waitingFile + '.new', waitingFile);
     for (const w of p.waiting) if (!state.alerted?.[w.sentence.slice(0, 80)]) { logLine({ act: 'waiting-on-operator', sentence: w.sentence }); (state.alerted ||= {})[w.sentence.slice(0, 80)] = new Date(now).toISOString(); }
   }
-  const out = { ok: true, at: new Date(now).toISOString(), machine: cfg.me, applied: apply, agents: (agents || []).map((a) => ({ name: `${a.machine}.${a.agent}`, at: a.at, accounts: Object.keys(a.readings).concat(Object.keys(a.burn)).filter((k, i, x) => x.indexOf(k) === i) })), accounts: p.accounts, moves: p.moves, resumes: p.resumes, evicted: p.evicted || [], pins: p.pins, notes: p.notes, runway: p.runway, waiting: p.waiting, done, errors };
+  const out = { ok: true, at: new Date(now).toISOString(), machine: cfg.me, enabled: cfg.enabled, applied: apply, agents: (agents || []).map((a) => ({ name: `${a.machine}.${a.agent}`, at: a.at, accounts: Object.keys(a.readings).concat(Object.keys(a.burn)).filter((k, i, x) => x.indexOf(k) === i) })), accounts: p.accounts, moves: p.moves, resumes: p.resumes, evicted: p.evicted || [], pins: p.pins, notes: p.notes, runway: p.runway, waiting: p.waiting, done, errors };
   state.last = out;
   if (apply) writeState(state);
   return out;
 }
 
-// ---------- CLI ----------
+// ---------- what the CLI shows ----------
 
-function table(out) {
+export function renderQuota(out) {
   const lines = [`Copilot accounts on ${out.machine} (${out.at}):`];
+  if (out.enabled === false) lines.push(`  (the balancer is off: set "enabled": true in ${paths().config} to let it move projects)`);
   for (const a of out.accounts) lines.push(`  ${a.key.padEnd(34)} ${String(a.health).padEnd(8)} ${a.pct == null ? '   ?' : `${String(a.pct).padStart(5)}%`} left  ${a.burn_per_h == null ? 'burn ?                        ' : `${String(a.burn_per_h).padStart(6)}/h ${fmtH(a.hours_left).padStart(7)}${a.dry_at ? ` dry ${a.dry_at.slice(5, 16).replace('T', ' ')}Z` : '              '}`}  ${String(a.projects).padStart(2)} project(s), ${a.live_sessions} live  [${a.source || 'no reading'}${a.at ? ` ${a.at.slice(11, 16)}Z` : ''}]${a.overage ? ' overage ok' : ''}${a.agents?.length ? ` agents ${a.agents_per_h}/h (${a.agents.join(', ')})` : ''}${a.blocked_at ? ` quota error ${a.blocked_at}` : ''}`);
   for (const g of out.runway || []) lines.push(`  runway ${g.projects} project(s) on {${g.accounts.join(', ')}}: ${g.unlimited?.length ? `unlimited on ${g.unlimited.join(', ')}; ` : ''}tranche ${g.cap}% used; ${g.hours_left == null ? 'burn not known yet' : `${fmtH(g.hours_left)} of included requests at ${g.burn_per_h}/h`}${g.overage_fallback.length ? `, then enterprise overage on ${g.overage_fallback.join(', ')}` : ', NO overage fallback'}${g.reset ? ` (reset ${g.reset.slice(0, 10)})` : ''}`);
   for (const w of out.waiting || []) lines.push(`  WAITING ON THE OPERATOR: ${w.sentence}`);
@@ -970,27 +914,16 @@ function table(out) {
   return lines.join('\n');
 }
 
-export async function main(argv) {
-  const [sub = 'plan', ...rest] = argv;
-  const json = rest.includes('--json');
-  if (sub === 'status') { console.log(JSON.stringify(readState().last)); return 0; }
-  if (sub === 'read') {
-    const cfg = config();
-    const st = appState();
-    const r = await read(st, cfg, readState().readings);
-    console.log(json ? JSON.stringify(r) : Object.entries(r.readings).map(([k, v]) => `${k.padEnd(34)} ${String(v.pct).padStart(5)}% left (${v.remaining ?? '?'} of ${v.entitlement ?? '?'}) ${v.source} ${v.at}`).join('\n') + (Object.keys(r.errors).length ? `\n(${JSON.stringify(r.errors)})` : ''));
-    return 0;
-  }
-  if (sub === 'plan' || sub === 'tick') {
-    const i = rest.indexOf('--only');
-    const out = await tick({ apply: sub === 'tick' && rest.includes('--apply'), only: i >= 0 ? rest[i + 1] : null });
-    console.log(json || sub === 'tick' ? JSON.stringify(out) : table(out));
-    return 0;
-  }
-  if (sub === 'listen') { listen({ log: (t) => console.error(t) }); await new Promise(() => {}); }
-  throw new Error('usage: quota-balance.mjs read | plan | tick [--apply] [--only <project id>] | status | listen');
+// The CLI's and the library's entry points: `shepherd quota read|plan|status` and the resident tick.
+export const status = () => readState().last;
+
+export async function readAll(d, cfg = config()) {
+  return read(d, await appState(d), cfg, readState().readings);
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
-  try { process.exitCode = await main(process.argv.slice(2)); } catch (e) { console.log(JSON.stringify({ ok: false, error: e.message })); process.exitCode = 1; }
+export function renderReadings(r) {
+  const lines = Object.entries(r.readings).map(([k, v]) => `${k.padEnd(34)} ${String(v.pct).padStart(5)}% left (${v.remaining ?? '?'} of ${v.entitlement ?? '?'}) ${v.source} ${v.at}`);
+  if (Object.keys(r.errors).length) lines.push(`(${JSON.stringify(r.errors)})`);
+  return lines.join('\n');
 }
+

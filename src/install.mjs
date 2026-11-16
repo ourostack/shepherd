@@ -1,5 +1,6 @@
-// `shepherd install`: the launch agent that runs `shepherd watch --quiet` every 60 s, so the health watch runs with no one
-// at a terminal. Loading replaces a running copy of the same label. Nothing here runs unless the person asks for it.
+// `shepherd install`: the launch agent that keeps `shepherd watch --every 60 --quiet` running, so the health watch and the
+// quota balancer run with no one at a terminal. KeepAlive restarts it if it exits. Loading replaces a running copy of the
+// same label. Nothing here runs unless the person asks for it.
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -7,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const LABEL = 'bot.ouro.shepherd';
+export const WATCH_ARGS = ['watch', '--every', '60', '--quiet'];
 
 // A Homebrew node runs from a versioned Cellar folder that the next upgrade removes; launchd needs the stable link.
 export function stableNode(execPath, exists = fs.existsSync) {
@@ -27,10 +29,10 @@ export function watchPlist({ node, bin, log, path: searchPath }) {
   <key>Label</key><string>${esc(LABEL)}</string>
   <key>ProgramArguments</key>
   <array>
-${[node, bin, 'watch', '--quiet'].map((a) => `    <string>${esc(a)}</string>`).join('\n')}
+${[node, bin, ...WATCH_ARGS].map((a) => `    <string>${esc(a)}</string>`).join('\n')}
   </array>
   <key>RunAtLoad</key><true/>
-  <key>StartInterval</key><integer>60</integer>
+  <key>KeepAlive</key><true/>
   <key>LimitLoadToSessionType</key><string>Aqua</string>
   <key>EnvironmentVariables</key>
   <dict>

@@ -1,12 +1,24 @@
 // The quota balancer keeps every Copilot app session on an account with premium requests left.
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const Q = await import(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'setup', 'quota-balance.mjs'));
+const Q = await import('../src/quota.mjs');
+import { tookTurnSince } from '../src/history.mjs';
+
+// Every file the balancer reads or writes goes to a temp folder: nothing here touches the real config, state or app.
+const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), 'shepherd-quota-test-'));
+Object.assign(process.env, {
+  SHEPHERD_QUOTA_CONFIG: path.join(SANDBOX, 'quota.json'),
+  SHEPHERD_QUOTA_STATE: path.join(SANDBOX, 'quota-balance.json'),
+  SHEPHERD_QUOTA_APP: path.join(SANDBOX, 'quota-app.json'),
+  SHEPHERD_QUOTA_WAITING: path.join(SANDBOX, 'waiting-on-operator.quota.json'),
+  SHEPHERD_QUOTA_LOG: path.join(SANDBOX, 'shepherd-quota.jsonl'),
+});
+after(() => fs.rmSync(SANDBOX, { recursive: true, force: true }));
 const NOW = Date.parse('2026-11-09T21:40:00Z');
 const at = (min) => new Date(NOW - min * 60000).toISOString();
 const cfg = { ...Q.DEFAULTS, me: 'test' };
@@ -28,7 +40,7 @@ test('billingAccount mirrors the app: pin, else repository account, else default
   assert.equal(Q.billingAccount({ copilot_account_id: 'e' }, [{ ...A.managed, copilot: false }, A.personal], true).id, 'p', 'an account without a seat cannot bill');
 });
 
-test('quotaStall finds a 402 that nothing continued (real event shape, 133f1eaa, 2026-11-09)', () => {
+test('quotaStall finds a 402 that nothing continued (a real event shape)', () => {
   const err = JSON.stringify({ type: 'session.error', data: { errorType: 'quota', message: 'You have exceeded your monthly quota', statusCode: 402, errorCode: 'quota_exceeded' }, id: 'x1', timestamp: at(10) });
   const turn = JSON.stringify({ type: 'assistant.turn_start', data: {}, id: 't', timestamp: at(5) });
   const user = JSON.stringify({ type: 'user.message', data: {}, id: 'u', timestamp: at(20) });
@@ -116,11 +128,11 @@ const MS = ['work-org/*', 'another-work-org/*', 'home-project'];
 const scoped = { ...cfg, repo_rules: [{ repo: MS, accounts: ['work-user@github.com', '*@ghe-one.example.com', '*@ghe-two.example.com'] }], account_rules: [{ account: 'work-user@github.com', repos: MS }] };
 
 test('scope: the managed account bills only a work organization repositories, and a work organization repositories never bill the personal account', () => {
-  const personal = proj('ouro-ui', 'g', { github_owner: 'ourostack', github_repo: 'ouro-ui' });
+  const personal = proj('app-ui', 'g', { github_owner: 'me', github_repo: 'app-ui' });
   const work = proj('home-project', 'g', { github_owner: null, github_repo: null });
   assert.equal(Q.allowed(personal, A.managed, scoped), false, 'managed never bills a personal repository');
   assert.equal(Q.allowed(personal, A.personal, scoped), true);
-  assert.equal(Q.allowed(personal, A.ghe, scoped), true, 'the operator pinned personal repositories to GHE himself');
+  assert.equal(Q.allowed(personal, A.ghe, scoped), true, 'a person pinned personal repositories to GHE by hand');
   assert.equal(Q.allowed(work, A.personal, scoped), false, 'a project with no repository matches by name');
   assert.equal(Q.allowed(work, A.managed, scoped), true);
   const spentGhe = { ...readings, 'user@ghe-one.example.com': reading(0), 'user@ghe-two.example.com': reading(0), 'work-user@github.com': reading(60) };
@@ -129,7 +141,7 @@ test('scope: the managed account bills only a work organization repositories, an
 });
 
 test('scope: a project billing a forbidden account moves once no turn is running; only the billing account changes', () => {
-  const s = st([proj('ouro-ui', 'e', { github_owner: 'ourostack', github_repo: 'ouro-ui', github_account_id: 'p' })], [{ id: 's1', project_id: 'ouro-ui', name: 'x' }]);
+  const s = st([proj('app-ui', 'e', { github_owner: 'me', github_repo: 'app-ui', github_account_id: 'p' })], [{ id: 's1', project_id: 'app-ui', name: 'x' }]);
   const ok = { ...readings, 'work-user@github.com': reading(50) };
   assert.equal(Q.plan(s, ok, { s1: { warm: true, running: true } }, scoped, { now: NOW }).moves.length, 0);
   const m = Q.plan(s, ok, { s1: { warm: true, running: false } }, scoped, { now: NOW }).moves[0];
@@ -172,7 +184,7 @@ test('a project on overage moves back to included requests once no turn is runni
   assert.equal(Q.plan(s, r, { s1: { warm: true, running: false } }, cfg, { now: NOW }).moves[0].why, 'included');
 });
 
-test('a 402 on an overage account is remembered as refused; with nothing left the project is stuck and the operator is asked', () => {
+test('a 402 on an overage account is remembered as refused; with nothing left the project is stuck and a person is asked', () => {
   const all = { 'user@github.com': reading(0), 'work-user@github.com': reading(0), 'user@ghe-one.example.com': ov(0), 'user@ghe-two.example.com': ov(0, { at: at(30) }) };
   const work = proj('home-project', 'm', { github_owner: null, github_repo: null });
   const s = st([work], [{ id: 's1', project_id: 'home-project', name: 'x' }]);
@@ -193,7 +205,7 @@ test('burn rate: requests an hour over the window, restarting after a reset; too
   assert.equal(f.k.hours_left, 30);
 });
 
-test('forecast: the operator is told well before a group with no overage fallback runs dry, not at the moment it does', () => {
+test('forecast: a person is told well before a group with no overage fallback runs dry, not at the moment it does', () => {
   const r = { 'user@github.com': reading(44), 'work-user@github.com': reading(5, { overage_permitted: false, remaining: 50000, reset: '2026-12-01T00:00:00Z' }), 'user@ghe-one.example.com': reading(0, { overage_permitted: false }), 'user@ghe-two.example.com': reading(0, { overage_permitted: false }) };
   const burn = { 'work-user@github.com': { per_h: 1000, hours_left: 50 } };
   const work = proj('home-project', 'e', { github_owner: null, github_repo: null });
@@ -207,7 +219,7 @@ test('forecast: the operator is told well before a group with no overage fallbac
   assert.equal(Q.plan(st([work]), r, {}, scoped, { now: NOW, burn: { 'work-user@github.com': { per_h: 100 } } }).waiting.length, 0, '500 h away: not yet');
 });
 
-test('2026-11-09 15:45: projects with idle warm runtimes on a 29%-left account move at a quiet moment, before the operator has to', () => {
+test('projects with idle warm runtimes on a 29%-left account move at a quiet moment, before a person has to', () => {
   const r = { ...readings, 'user@ghe-one.example.com': reading(28.7), 'user@ghe-two.example.com': reading(98.7) };
   const s = st([proj('ws', 'g'), proj('desk', 'g')], [{ id: 'a', project_id: 'ws', name: 'workspace' }, { id: 'b', project_id: 'desk', name: 'disk' }]);
   const p = Q.plan(s, r, { a: { warm: true }, b: { warm: true, working: true } }, cfg, { now: NOW });
@@ -230,7 +242,7 @@ test('remote steering: a project billed from another host than its repository is
   assert.doesNotMatch(Q.plan(st([proj('app', 'e')]), even, {}, cfg, { now: NOW }).notes.join(' '), /remote steering/, 'same host: nothing to report');
 });
 
-// ---------- tranches (the operator, 2026-11-09 18:25) ----------
+// ---------- tranches ----------
 
 const K = { p: 'user@github.com', e: 'work-user@github.com', g: 'user@ghe-one.example.com', m: 'user@ghe-two.example.com' };
 const used = (u, extra) => reading(100 - u, extra);
@@ -246,7 +258,7 @@ test('usedPct: spent is 100, unlimited 0, no reading null', () => {
 
 test('trancheCap: the lowest of 30/60/90/100 some eligible account is still below; it rises only when all reach it', () => {
   const r = { [K.p]: used(55.5), [K.e]: used(100), [K.g]: used(71.3), [K.m]: used(4.6) };
-  assert.equal(Q.trancheCap(r, ORDER), 30, '2026-11-10 02:45Z readings: ghe-two.example.com is the one under 30');
+  assert.equal(Q.trancheCap(r, ORDER), 30, 'the readings: ghe-two.example.com is the one under 30');
   assert.equal(Q.trancheCap({ ...r, [K.m]: used(30) }, ORDER), 60, 'every account at 30 or more: 60');
   assert.equal(Q.trancheCap({ ...r, [K.m]: used(29.9) }, ORDER), 30, 'one still under 30: the cap holds');
   assert.equal(Q.trancheCap({ [K.p]: used(60), [K.g]: used(95) }, [K.p, K.g]), 90);
@@ -269,7 +281,7 @@ test('plan by tranche: fill one account to the cap, then the next; the cap rises
   const s = (pin) => st([proj('desk', pin)], [{ id: 's1', project_id: 'desk', name: 'x' }]);
   const quiet = { s1: { warm: true } };
   const base = { [K.p]: used(55.5), [K.e]: used(100), [K.g]: used(71.3), [K.m]: used(4.6) };
-  assert.equal(Q.plan(s('m'), base, quiet, cfg, { now: NOW }).moves.length, 0, 'tonight: everything on ghe-two.example.com, under 30, stays');
+  assert.equal(Q.plan(s('m'), base, quiet, cfg, { now: NOW }).moves.length, 0, 'everything on ghe-two.example.com, under 30, stays');
   assert.equal(Q.plan(s('m'), { ...base, [K.m]: used(31) }, quiet, cfg, { now: NOW }).moves.length, 0, 'two at 31, every account at 30+: cap 60, stays');
   const at60 = Q.plan(s('m'), { ...base, [K.m]: used(60) }, quiet, cfg, { now: NOW }).moves[0];
   assert.deepEqual([at60.to, at60.why, at60.cap], [K.p, 'tranche', 60], 'two at 60: the personal account (55.5) is first in order below 60');
@@ -302,62 +314,62 @@ test('runway groups show the current tranche', () => {
   assert.equal(p.runway[0].cap, 30);
 });
 
-// ---------- agent burn (plan 6.2) ----------
+// ---------- agent burn ----------
 
 test('parseAgentQuota reads <machine>.<agent>.quota.txt and ignores machine files', () => {
-  const body = JSON.stringify({ machine: 'mac-b', agent: 'ouroboros', at: at(2), readings: [{ key: K.m, leftPct: 60, burnPerH: 1200, dryAt: null, overageOk: true, at: at(2) }, { key: 'not a key', leftPct: 1 }] });
-  const a = Q.parseAgentQuota('mac-b.ouroboros.quota.txt', body);
-  assert.equal(a.agent, 'ouroboros');
-  assert.equal(a.machine, 'mac-b');
+  const body = JSON.stringify({ machine: 'machine-b', agent: 'agent-a', at: at(2), readings: [{ key: K.m, leftPct: 60, burnPerH: 1200, dryAt: null, overageOk: true, at: at(2) }, { key: 'not a key', leftPct: 1 }] });
+  const a = Q.parseAgentQuota('machine-b.agent-a.quota.txt', body);
+  assert.equal(a.agent, 'agent-a');
+  assert.equal(a.machine, 'machine-b');
   assert.equal(a.readings[K.m].pct, 60);
   assert.equal(a.readings[K.m].overage_permitted, true);
-  assert.equal(a.readings[K.m].source, 'agent:mac-b.ouroboros');
+  assert.equal(a.readings[K.m].source, 'agent:machine-b.agent-a');
   assert.deepEqual(a.burn, { [K.m]: 1200 });
-  assert.equal(Q.parseAgentQuota('mac-b.quota.txt', body), null, 'a Mac file is not an agent file');
-  assert.equal(Q.parseAgentQuota('mac-b.ouroboros.quota.txt', '{half'), null);
+  assert.equal(Q.parseAgentQuota('machine-b.quota.txt', body), null, 'a machine file is not an agent file');
+  assert.equal(Q.parseAgentQuota('machine-b.agent-a.quota.txt', '{half'), null);
 });
 
 test('agent burn counts in the forecast as a floor: never added on top of the account counter that already includes it', () => {
   const h = [{ at: at(120), spent: 600000 }, { at: at(0), spent: 620000 }];
-  const agents = Q.agentBurn([{ machine: 'mac-b', agent: 'ouroboros', at: at(2), burn: { k: 3000, j: 500 } }, { machine: 'kvm-a', agent: 'housesitter', at: at(60 * 24), burn: { k: 99999 } }], { now: NOW });
-  assert.deepEqual(agents.k, { per_h: 3000, agents: ['mac-b.ouroboros'] }, 'a day-old agent file is ignored');
+  const agents = Q.agentBurn([{ machine: 'machine-b', agent: 'agent-a', at: at(2), burn: { k: 3000, j: 500 } }, { machine: 'machine-c', agent: 'agent-b', at: at(60 * 24), burn: { k: 99999 } }], { now: NOW });
+  assert.deepEqual(agents.k, { per_h: 3000, agents: ['machine-b.agent-a'] }, 'a day-old agent file is ignored');
   const f = Q.forecast({ k: h }, { k: { remaining: 300000 }, j: { remaining: 1000 } }, { now: NOW, agents });
   assert.equal(f.k.per_h, 10000, 'this Mac sees 10000/h, which already includes the agent');
   assert.equal(f.k.agents_per_h, 3000);
   assert.equal(f.j.per_h, 500, 'no history of its own: the agent burn is the forecast');
   assert.equal(f.j.hours_left, 2);
-  const g = Q.forecast({ k: h }, { k: { remaining: 300000 } }, { now: NOW, agents: { k: { per_h: 15000, agents: ['mac-b.ouroboros'] } } });
+  const g = Q.forecast({ k: h }, { k: { remaining: 300000 } }, { now: NOW, agents: { k: { per_h: 15000, agents: ['machine-b.agent-a'] } } });
   assert.equal(g.k.per_h, 15000, 'agents report more than this Mac saw: theirs');
 });
 
-test('2026-11-10 02:57Z mac-a: a removed agent file stops counting at the next tick; agent readings are never cached', () => {
-  const probe = { pct: 28.7, remaining: null, entitlement: null, has_quota: true, source: 'agent:mac-b.tranche-probe', at: at(1) };
-  const macB = reading(28.7, { source: 'fleet:mac-b/direct', at: at(13) });
-  const prev = { [K.g]: { ...probe, source: 'cached:agent:mac-b.tranche-probe' } };
+test('a removed agent file stops counting at the next tick; agent readings are never cached', () => {
+  const probe = { pct: 28.7, remaining: null, entitlement: null, has_quota: true, source: 'agent:machine-b.probe', at: at(1) };
+  const macB = reading(28.7, { source: 'fleet:machine-b/direct', at: at(13) });
+  const prev = { [K.g]: { ...probe, source: 'cached:agent:machine-b.probe' } };
   const r = Q.combine(prev, { [K.g]: macB }, {}, {}, { now: NOW });
-  assert.equal(r[K.g].source, 'fleet:mac-b/direct', 'the probe is gone from the gist: its cached reading is dropped, even though it is newer');
+  assert.equal(r[K.g].source, 'fleet:machine-b/direct', 'the probe is gone from the gist: its cached reading is dropped, even though it is newer');
   assert.equal(Q.combine({ [K.g]: probe }, {}, {}, {}, { now: NOW })[K.g], undefined, 'a cached agent reading never carries over on its own');
   assert.equal(Q.combine({}, { [K.g]: { ...probe, at: at(7 * 60) } }, {}, {}, { now: NOW, staleH: 6 })[K.g], undefined, 'an agent reading over stale_h old has expired');
   const live = Q.combine({ [K.g]: { ...macB, source: 'direct' } }, { [K.g]: probe }, {}, {}, { now: NOW });
-  assert.equal(live[K.g].source, 'agent:mac-b.tranche-probe', 'while the file is there and fresh, it counts');
+  assert.equal(live[K.g].source, 'agent:machine-b.probe', 'while the file is there and fresh, it counts');
   assert.equal(live[K.g].remaining, 287000, 'a percent-only agent reading takes the entitlement from another reading of the account');
   const next = Q.combine(live, { [K.g]: macB }, {}, {}, { now: NOW });
-  assert.equal(next[K.g].source, 'fleet:mac-b/direct', 'and the tick after the file goes, it is gone');
+  assert.equal(next[K.g].source, 'fleet:machine-b/direct', 'and the tick after the file goes, it is gone');
 });
 
 test('a reading with no remaining count never forecasts "dry now"', () => {
   const h = [{ at: at(120), spent: 600000 }, { at: at(0), spent: 620000 }];
-  const f = Q.forecast({ k: h }, { k: { pct: 28.7, remaining: null } }, { now: NOW, agents: { k: { per_h: 5000, agents: ['mac-b.x'] } } });
+  const f = Q.forecast({ k: h }, { k: { pct: 28.7, remaining: null } }, { now: NOW, agents: { k: { per_h: 5000, agents: ['machine-b.x'] } } });
   assert.equal(f.k.hours_left, null);
   const p = Q.plan(st([proj('desk', 'g')]), { ...readings, [K.g]: { ...reading(28.7), remaining: null } }, {}, cfg, { now: NOW, burn: f.k ? { [K.g]: f.k } : {} });
   assert.equal(p.accounts.find((a) => a.key === K.g).dry_at, null);
 });
 
-// ---------- unlimited, a person's pins, and evictions (the operator, 2026-11-16) ----------
+// ---------- unlimited, a person's pins, and evictions ----------
 
 const unl = (extra) => reading(100, { unlimited: true, ...extra });
-const MACHINES = JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'setup', 'machines.json'), 'utf8'));
-const live16 = { ...cfg, ...MACHINES.defaults.quota_balance };
+// An example rule set: the personal account may bill the work organization's repositories too.
+const live16 = { ...cfg, repo_rules: [{ repo: MS, accounts: ['work-user@github.com', 'user@github.com', '*@ghe-one.example.com', '*@ghe-two.example.com'] }], account_rules: [{ account: 'work-user@github.com', repos: MS }] };
 
 test('prefer unlimited: a project bills the unlimited account its rules allow; the tranches cover only the limited ones', () => {
   const r = { ...readings, 'user@github.com': unl() };
@@ -381,7 +393,7 @@ test('a person\'s pin is kept: no scope, tranche or unlimited move takes it, unt
   assert.equal(p.moves.length, 0);
   assert.deepEqual(p.pins.map((x) => [x.project, x.account]), [['a', 'user@ghe-one.example.com']]);
   assert.equal(Q.plan(st([pinned]), r, {}, cfg, { now: NOW, ownPins: { a: 'g' } }).moves[0].why, 'unlimited', 'a pin the balancer set moves as before');
-  const managed = proj('ouro-ui', 'e', { github_owner: 'ourostack', github_repo: 'ouro-ui', copilot_account_source: 'user' });
+  const managed = proj('app-ui', 'e', { github_owner: 'me', github_repo: 'app-ui', copilot_account_source: 'user' });
   assert.equal(Q.plan(st([managed]), { ...r, 'work-user@github.com': reading(50) }, {}, scoped, { now: NOW }).moves.length, 0, 'not even out of scope');
 });
 
@@ -393,21 +405,19 @@ test('a person\'s pin on a spent account still moves', () => {
   assert.deepEqual(m.resume.map((x) => x.reason), ['quota']);
 });
 
-test('2026-11-16 07:25 PT: the operator\'s pins on user@github.com are not moved back by scope, under the old rule or the new one', () => {
+test('a person\'s pins on user@github.com are not moved back by scope, under the old rule or the new one', () => {
   const r = { 'user@github.com': unl(), 'work-user@github.com': reading(0), 'user@ghe-one.example.com': reading(24.8), 'user@ghe-two.example.com': reading(0) };
   const ws = proj('workspace shared workspace', 'p', { github_owner: 'work-org', github_repo: 'workspace', copilot_account_source: 'user' });
   const before = { ...scoped, repo_rules: [{ repo: MS, accounts: ['work-user@github.com', '*@ghe-one.example.com', '*@ghe-two.example.com'] }] };
   assert.equal(Q.plan(st([ws]), r, {}, before, { now: NOW }).moves.length, 0, 'the 07:25 scope move');
   assert.equal(Q.plan(st([ws]), r, {}, live16, { now: NOW }).moves.length, 0);
   const pages = proj('work-org/workspace-pages', 'g', { github_owner: 'work-org', github_repo: 'workspace-pages' });
-  assert.equal(Q.allowed(pages, A.personal, live16), true, 'machines.json lets user@github.com bill a work organization repositories');
-  assert.deepEqual(Q.plan(st([pages]), r, {}, live16, { now: NOW }).moves.map((m) => [m.to, m.why]), [['user@github.com', 'unlimited']]);
+  assert.equal(Q.allowed(pages, A.personal, live16), true,   'the example config lets user@github.com bill a work organization repositories');  assert.deepEqual(Q.plan(st([pages]), r, {}, live16, { now: NOW }).moves.map((m) => [m.to, m.why]), [['user@github.com', 'unlimited']]);
   assert.deepEqual(Q.pinsFromLog([
     JSON.stringify({ act: 'move', project_id: 'ws', to_id: 'g', result: { ok: true } }),
     JSON.stringify({ act: 'move', project_id: 'ws', to_id: 'p', result: { ok: false } }),
     JSON.stringify({ act: 'resume', session: 's' }),
-  ]), { ws: 'g' }, 'only successful moves; the operator\'s re-pin to p after it reads as his');
-});
+  ]), { ws: 'g' },   'only successful moves; a re-pin by a person after it reads as theirs');});
 
 // Events shaped like a coordinator session at the 15:32:02Z re-pin of its own project, and at the 15:23:57Z one, idle.
 const ev = (type, iso, data = {}) => JSON.stringify({ type, data, id: `${type}-${iso}`, timestamp: iso });
@@ -435,8 +445,8 @@ test('evictions: a session a re-pin stopped mid-work is resumed; an idle one, or
   assert.deepEqual(Q.evictionResumes(evs, (id) => hist[id], { now }).map((x) => x.session_id), [SID]);
   assert.deepEqual(Q.evictionResumes(evs, (id) => hist[id], { now, resumed: { [SID]: { at: '2026-11-16T15:32:30Z' } } }), [], 'already messaged since that eviction');
   assert.deepEqual(Q.evictionResumes(evs, (id) => hist[id], { now: now + 3600000 }), [], 'outside the window');
-  assert.equal(Q.tookTurn([...midTurn, ev('assistant.turn_start', '2026-11-16T15:33:10.000Z')], '2026-11-16T15:33:00Z'), true);
-  assert.equal(Q.tookTurn(midTurn, '2026-11-16T15:33:00Z'), false);
+  assert.equal(tookTurnSince([...midTurn, ev('assistant.turn_start', '2026-11-16T15:33:10.000Z')], Date.parse('2026-11-16T15:33:00Z')), true);
+  assert.equal(tookTurnSince(midTurn, Date.parse('2026-11-16T15:33:00Z')), false);
 });
 
 test('readAppLog reads only what the app wrote since the last tick, whole lines, across a rotation', () => {
@@ -455,4 +465,93 @@ test('readAppLog reads only what the app wrote since the last tick, whole lines,
   r = Q.readAppLog(r.cursor, { dir });
   assert.deepEqual(Q.parseEvictions(r.text).map((e) => e.at), ['2026-11-16T15:02:00Z', '2026-11-16T15:03:00Z']);
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// ---------- the tick, against an in-memory app (the app's rows, its socket and its histories are fakes) ----------
+
+const iso = (min) => new Date(NOW - min * 60000).toISOString();
+const ev402 = (min) => JSON.stringify({ type: 'session.error', data: { errorType: 'quota', statusCode: 402, errorCode: 'quota_exceeded' }, id: `e${min}`, timestamp: iso(min) });
+const evUser = (min) => JSON.stringify({ type: 'user.message', data: {}, id: `u${min}`, timestamp: iso(min) });
+
+function fakeDeps({ copilotHome, accounts, projects, sessions, histories = {}, pins = {}, exchange = async () => [] }) {
+  const sql = async (q) => {
+    if (/FROM accounts/.test(q)) return accounts;
+    if (/SELECT copilot_account_id FROM projects WHERE id = '([^']*)'/.test(q)) return [{ copilot_account_id: pins[q.match(/id = '([^']*)'/)[1]] ?? null }];
+    if (/app_state/.test(q)) return [{ value: JSON.stringify({ separateCopilotAccountEnabled: true }) }];
+    if (/FROM projects/.test(q)) return projects.map((p) => ({ ...p, copilot_account_id: pins[p.id] ?? p.copilot_account_id }));
+    if (/FROM sessions/.test(q)) return sessions;
+    return [];
+  };
+  return {
+    copilotHome,
+    now: () => NOW,
+    sleep: async () => {},
+    sql,
+    exchange,
+    history: (id) => ({ lines: histories[id] ?? [], mtime: 0 }),
+    historyPath: (id) => path.join(copilotHome, 'session-state', id, 'events.jsonl'),
+  };
+}
+
+test('config: off unless quota.json says "enabled": true; a file that is not JSON is a ShepherdError', () => {
+  const f = path.join(SANDBOX, 'cfg-check.json');
+  assert.equal(Q.config(path.join(SANDBOX, 'missing.json')).enabled, false, 'no file: off');
+  fs.writeFileSync(f, '{}');
+  assert.equal(Q.config(f).enabled, false);
+  fs.writeFileSync(f, '{"enabled": true, "low_pct": 3}');
+  assert.equal(Q.config(f).enabled, true);
+  assert.equal(Q.config(f).low_pct, 3);
+  fs.writeFileSync(f, '{"enabled": "yes"}');
+  assert.equal(Q.config(f).enabled, false, 'only the boolean true turns it on');
+  fs.writeFileSync(f, '{half');
+  assert.throws(() => Q.config(f), { code: 'quota-config' });
+});
+
+test('no config: an applied tick does nothing: no reads, no messages, no files written', async () => {
+  let touched = 0;
+  const d = fakeDeps({ copilotHome: SANDBOX, accounts: [], projects: [], sessions: [], exchange: async () => { touched++; return []; } });
+  const out = await Q.tick(d, { apply: true, cfg: Q.config(path.join(SANDBOX, 'none.json')), fetchDirect: async () => { touched++; return null; } });
+  assert.deepEqual(out, { ok: true, disabled: true, applied: false });
+  assert.equal(touched, 0);
+  assert.equal(fs.existsSync(process.env.SHEPHERD_QUOTA_STATE), false);
+  assert.equal(fs.existsSync(process.env.SHEPHERD_QUOTA_LOG), false);
+});
+
+test('an applied tick moves a project off a spent account, messages the session its quota error stopped, and logs both', async () => {
+  const pins = {};
+  const sent = [];
+  const exchange = async (messages) => messages.map((m) => {
+    if (m.type === 'set_project_copilot_account') { pins[m.project_id] = m.account_id; return { type: 'project_updated', project: { id: m.project_id } }; }
+    sent.push(m);
+    return { type: 'session_message_sent', request_id: m.request_id, session_id: m.session_id };
+  });
+  const S = '00000011-0000-4000-8000-000000000011';
+  const d = fakeDeps({
+    copilotHome: SANDBOX,
+    accounts: [{ id: 'a1', login: 'user', host: 'github.com', is_default: 1, settings_json: '{}' }, { id: 'a2', login: 'other', host: 'github.com', is_default: 0, settings_json: '{}' }],
+    projects: [{ id: 'p1', name: 'app', github_owner: 'me', github_repo: 'app', github_account_id: 'a1', copilot_account_id: 'a1', copilot_account_source: 'app' }],
+    sessions: [{ id: S, title: 'work', is_running: 0, updated_at: iso(1), project_id: 'p1', name: 'work' }],
+    histories: { [S]: [evUser(20), ev402(5)] },
+    pins,
+    exchange,
+  });
+  const at = new Date(NOW).toISOString();
+  const fetchDirect = async (a) => (a.id === 'a1'
+    ? Q.normalize({ entitlement: 1000000, remaining: 0, percent_remaining: 0, has_quota: false }, { source: 'direct', at })
+    : Q.normalize({ entitlement: 1000000, remaining: 800000, percent_remaining: 80, has_quota: true }, { source: 'direct', at }));
+  const cfg = { ...Q.DEFAULTS, enabled: true, me: 'test' };
+
+  const out = await Q.tick(d, { apply: true, cfg, now: NOW, fetchDirect });
+
+  assert.equal(out.done.moved.length, 1);
+  assert.deepEqual([out.done.moved[0].from, out.done.moved[0].to, out.done.moved[0].why, out.done.moved[0].ok], ['user@github.com', 'other@github.com', 'out', true]);
+  assert.equal(pins.p1, 'a2', 'the project is re-pinned to the account with the most left');
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].session_id, S);
+  assert.match(sent[0].prompt, /switched from user@github\.com to other@github\.com/);
+  assert.deepEqual(out.done.resumed.map((r) => [r.id, r.ok]), [[S, true]]);
+  assert.deepEqual(JSON.parse(fs.readFileSync(process.env.SHEPHERD_QUOTA_STATE, 'utf8')).pins, { p1: 'a2' });
+  const lines = fs.readFileSync(process.env.SHEPHERD_QUOTA_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.deepEqual(lines.map((l) => [l.act, l.act === 'resume' ? l.session : l.to]), [['move', 'other@github.com'], ['resume', S]]);
+  assert.equal(Q.status().applied, true);
 });
