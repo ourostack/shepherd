@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import zlib from 'node:zlib';
 
 const bin = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'shepherd.mjs');
 const run = (args, env = {}) => spawnSync(process.execPath, [bin, ...args], { encoding: 'utf8', env: { ...process.env, ...env } });
@@ -17,6 +18,8 @@ test('shepherd help prints the two verbs and exits 0; an unknown verb or flag is
   assert.equal(verb.status, 2);
   assert.match(verb.stderr, /shepherd: usage: unknown command "sweep"\. Fix: shepherd help\./);
   assert.equal(run(['status', '--send']).status, 2);
+  assert.equal(run(['restore-history']).status, 2);
+  assert.match(run(['restore-history']).stderr, /restore-history needs a session id\. Fix: shepherd restore-history <id>\./);
 });
 
 test('shepherd status with no app database says where it looked and exits 1', () => {
@@ -56,6 +59,25 @@ test('shepherd status --json reads a pretend app database and history: busy, idl
     assert.equal(sessions[0].why, 'mid-turn (last assistant.turn_start)');
     const text = run(['status', '--copilot-home', home]);
     assert.match(text.stdout, /^aaaaaaaa  busy one  busy \(mid-turn \(last assistant\.turn_start\)\)  0\.0 MB$/m);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('shepherd restore-history puts a compressed history back and says so', { skip: !fs.existsSync('/usr/bin/gzip') && 'needs /usr/bin/gzip' }, () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'shepherd-restore-'));
+  try {
+    const id = 'aaaaaaaa-1';
+    const file = path.join(home, 'session-state', id, 'events.jsonl');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(`${file}.gz`, zlib.gzipSync('{"type":"user.message"}\n'));
+    const r = run(['restore-history', id, '--copilot-home', home]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /^restored aaaaaaaa-1$/m);
+    assert.equal(fs.readFileSync(file, 'utf8'), '{"type":"user.message"}\n');
+    const again = run(['restore-history', id, '--json', '--copilot-home', home]);
+    assert.equal(again.status, 0);
+    assert.equal(JSON.parse(again.stdout).restored, false, 'a second restore has nothing to do');
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }

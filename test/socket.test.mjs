@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { appReady, archive, exchange, sendTo } from '../src/index.mjs';
+import zlib from 'node:zlib';
+import { appReady, archive, exchange, historyFile, sendTo } from '../src/index.mjs';
+import { fakeHistoryDeps } from './fake-history.mjs';
 import { startFakeApp } from './fake-app.mjs';
 
 const WS = 'workspace-1111-2222-3333-444444444444';
@@ -16,7 +18,7 @@ const skip = typeof WebSocket !== 'function' ? 'needs the global WebSocket (Node
 async function withApp(opts, fn) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'shepherd-sock-'));
   const app = await startFakeApp(home, opts);
-  const d = { exchange: (messages, o) => exchange(home, messages, o) };
+  const d = { ...fakeHistoryDeps(home), exchange: (messages, o) => exchange(home, messages, o) };
   try { return await fn({ home, app, d }); } finally {
     await app.close();
     fs.rmSync(home, { recursive: true, force: true });
@@ -76,4 +78,48 @@ test('exchange with no port file: the app is not serving, and the fix is to open
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
+});
+
+test('sendTo: a compressed history is put back before the prompt goes, so a resumed session has it', { skip }, async () => {
+  await withApp({}, async ({ home, d }) => {
+    const file = historyFile(home, SESS);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(`${file}.gz`, zlib.gzipSync('{"type":"user.message"}\n'));
+    assert.equal((await sendTo(d, SESS, 'carry on', 3000)).ok, true);
+    assert.equal(fs.readFileSync(file, 'utf8'), '{"type":"user.message"}\n');
+    assert.equal(fs.existsSync(`${file}.gz`), false);
+  });
+});
+
+test('archive: after the app confirms and its database shows the session archived, the history is compressed', { skip }, async () => {
+  await withApp({}, async ({ home, d }) => {
+    const file = historyFile(home, SESS);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, '{"type":"user.message"}\n');
+    let reads = 0;
+    const later = { ...d, sql: async () => (++reads < 3 ? [] : [{ id: SESS, archived_at: '2026-11-16' }]) };
+    const r = await archive(later, { id: SESS }, { waitMs: 3000 });
+    assert.equal(r.ok, true);
+    assert.equal(r.compressed.ok, true, r.compressed.why);
+    assert.equal(fs.existsSync(`${file}.gz`), true);
+    assert.equal(fs.existsSync(file), false);
+  });
+});
+
+test('archive: a failed compress keeps the archive ok; compress: false leaves the history alone', { skip }, async () => {
+  await withApp({}, async ({ home, d }) => {
+    const file = historyFile(home, SESS);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, '{"type":"user.message"}\n');
+    const archived = [{ id: SESS, archived_at: '2026-11-16' }];
+    const failing = { ...d, sql: async () => archived, openBy: async () => { throw new Error('lsof missing'); } };
+    const failed = await archive(failing, { id: SESS }, { waitMs: 3000 });
+    assert.equal(failed.ok, true);
+    assert.equal(failed.compressed.ok, false);
+    assert.match(failed.compressed.why, /lsof could not say/);
+    const skipped = await archive({ ...d, sql: async () => archived }, { id: SESS }, { waitMs: 3000, compress: false });
+    assert.equal(skipped.compressed, null);
+    assert.equal(fs.existsSync(`${file}.gz`), false);
+    assert.equal(fs.existsSync(file), true);
+  });
 });

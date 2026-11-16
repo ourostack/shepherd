@@ -7,8 +7,10 @@ Shepherd keeps the GitHub Copilot app's sessions as work. Plain ESM, no build st
 - `import { deps, snapshot, sendTo, archive, exchange, appReady } from '@ouro.bot/shepherd'`
 - `deps({ copilotHome })` returns `{ now, sleep, sql, history, historySize, exchange }`. `sql` is a read-only query of `<copilotHome>/data.db`.
 - `snapshot(deps, now?, skip?)` returns one object per local, unarchived session: `id`, `title`, `mode`, `state` (`busy` or `idle`), `why`, `running`, `interrupted`, `workspaceId`. Sessions over 500 MB, or idle for over 24 h, are `idle` with a `why`.
-- `sendTo(deps, id, prompt, waitMs)` returns `{ ok, reply, error }`.
-- `archive(deps, row, { keepWorktree, waitMs })` archives `row.workspaceId` as a workspace, deleting its worktree only when `row.workspaceType === 'worktree'` and `keepWorktree` is not set. Without a workspace it archives the session. Returns `{ ok, session_id, error }`.
+- `sendTo(deps, id, prompt, waitMs)` returns `{ ok, reply, error }`. It restores a compressed history first.
+- `archive(deps, row, { keepWorktree, waitMs, compress })` archives `row.workspaceId` as a workspace, deleting its worktree only when `row.workspaceType === 'worktree'` and `keepWorktree` is not set. Without a workspace it archives the session. Returns `{ ok, session_id, error, compressed }`.
+- `compressHistory(deps, id, { dryRun })` gzips an archived (or unlisted) session's `events.jsonl` to `events.jsonl.gz` and returns `{ id, ok, before, after, why }`. It refuses a live session, a file a process has open, and an existing `.gz`. Each compression appends a `history-compressed` row to the disk ledger.
+- `restoreHistory(deps, id)` gunzips a compressed history back and returns `{ id, ok, restored, why }`.
 - `exchange(copilotHome, messages, { done, keep, waitMs })` and `appReady(deps)` talk to the app's socket on `<copilotHome>/run/ws.port` and `ws.token`.
 - `loopState(lines)`, `lastTurnAt(lines)`, `continuedSince(lines, since)`, `tookTurnSince(lines, since)`, `lastReply(lines, since)`, `readTail(file, bytes?)`, and the `READY` and `DEFER` tokens read a session's history.
 - Errors are `ShepherdError` with `code`, `problem` and `fix`; the message reads `<problem>. Fix: <fix>.`
@@ -16,13 +18,14 @@ Shepherd keeps the GitHub Copilot app's sessions as work. Plain ESM, no build st
 ## CLI
 
 - `shepherd status [--json] [--copilot-home <dir>]`: one line per local session.
+- `shepherd restore-history <id> [--json]`: puts back an archived session's compressed history, for a session unarchived by hand.
 - `shepherd help`.
-- Run it without installing: `npx github:ourostack/shepherd#v0.1.0 status --json` (not on npm yet).
-- Exit codes: 0 ok, 1 the app's data could not be read, 2 usage. Errors are one line.
+- Run it without installing: `npx github:ourostack/shepherd#v0.2.0 status --json` (not on npm yet).
+- Exit codes: 0 ok, 1 the app's data could not be read or the history could not be restored, 2 usage. Errors are one line.
 
 ## Rules
 
-- Shepherd is read-only except `sendTo` and `archive`. It never quits or relaunches the app; that is Housesitter's job.
+- Shepherd is read-only except `sendTo`, `archive`, `compressHistory` and `restoreHistory` (and the `restore-history` verb). It compresses only archived or unlisted sessions, never a live one. It never quits or relaunches the app; that is Housesitter's job.
 - Every failure says what probably happened and the fix.
 - Tests run against fakes (`test/fake-app.mjs` is a pretend socket). The real database test and CLI status test run only where `/usr/bin/sqlite3` exists.
 - Keep it small. A duty moves here only when a caller needs it.
