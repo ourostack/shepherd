@@ -1,0 +1,1 @@
+{ "readings": { "user@ghe-two.example.com": { "unlimited": false, "entitlement": 1000000, "remaining": 770000, "pct": 77, "has_quota": true, "source": "app", "at": "2026-11-09T21:39:00.000Z" } } }
