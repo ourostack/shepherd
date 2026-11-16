@@ -17,6 +17,7 @@ Shepherd keeps the GitHub Copilot app's sessions as work. Plain ESM, no build st
 
 - `shepherd status [--json] [--copilot-home <dir>]`: one line per local session.
 - `shepherd help`.
+- Run it without installing: `npx github:ourostack/shepherd#v0.1.0 status --json` (not on npm yet).
 - Exit codes: 0 ok, 1 the app's data could not be read, 2 usage. Errors are one line.
 
 ## Rules
