@@ -6,3 +6,6 @@ export { LOOKBACK_MS, MAX_HISTORY_BYTES, ROWS, STALE_MS, deps, historyFile, snap
 export { RESUME_T, pickTargets, resume, resumeText } from './resume.mjs';
 export { config as quotaConfig, listen as listenQuota, readAll as quotaRead, status as quotaStatus, tick as quotaTick } from './quota.mjs';
 export { renderSidebar, sidebarConfig, sidebarFile, sidebarPlan, tidy as sidebarTidy } from './sidebar.mjs';
+export { rows } from './rows.mjs';
+export { retireConfig, retireDeps, retireFile, retireSessions, watchRetire } from './retire.mjs';
+export { noticeOversizedSessions, whereItLeftOff } from './size-watch.mjs';

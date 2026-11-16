@@ -10,8 +10,9 @@ const LOOP = new Set(['user.message', 'assistant.turn_start', 'assistant.message
 const textOf = (r) => (typeof r === 'string' ? r : r?.content != null ? String(r.content) : JSON.stringify(r ?? ''));
 const parse = (l) => { try { return JSON.parse(l); } catch { return null; } };
 
-// The last `bytes` of a file as lines, without a partial first line. Missing file: no lines.
-export function readTail(f, bytes = TAIL_BYTES) {
+// The last `bytes` of a file as lines, without a partial first line (keepPartial keeps it, for a scan of plain text that
+// a cut line cannot break). Missing file: no lines.
+export function readTail(f, bytes = TAIL_BYTES, { keepPartial = false } = {}) {
   let fd;
   try {
     fd = fs.openSync(f, 'r');
@@ -20,8 +21,43 @@ export function readTail(f, bytes = TAIL_BYTES) {
     const buf = Buffer.alloc(len);
     fs.readSync(fd, buf, 0, len, size - len);
     const lines = buf.toString('utf8').split('\n');
-    return len < size ? lines.slice(1) : lines;
+    return len < size && !keepPartial ? lines.slice(1) : lines;
   } catch { return []; } finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+
+const MAX_LINE_BYTES = 8 * 1024 * 1024;
+
+// The complete lines of a file from byte `from` on, about `maxBytes` of them at most (the line that crosses it is read
+// whole), and the byte offset they end at. A line over MAX_LINE_BYTES is cut short and its rest is skipped. Missing file:
+// no lines, offset 0.
+export function readFrom(f, from, maxBytes, chunkBytes = 256 * 1024) {
+  let fd;
+  try { fd = fs.openSync(f, 'r'); } catch { return { lines: [], offset: 0 }; }
+  try {
+    const size = fs.fstatSync(fd).size;
+    const lines = [];
+    let offset = Math.min(from, size);
+    let pos = offset;
+    let carry = Buffer.alloc(0);
+    while (pos < size && offset - from < maxBytes) {
+      const buf = Buffer.alloc(Math.min(chunkBytes, size - pos));
+      fs.readSync(fd, buf, 0, buf.length, pos);
+      pos += buf.length;
+      const data = Buffer.concat([carry, buf]);
+      const base = pos - data.length;
+      let start = 0;
+      let nl;
+      while ((nl = data.indexOf(10, start)) >= 0) {
+        lines.push(data.subarray(start, nl).toString('utf8'));
+        start = nl + 1;
+        offset = base + start;
+        if (offset - from >= maxBytes) return { lines, offset };
+      }
+      carry = data.subarray(start);
+      if (carry.length > MAX_LINE_BYTES) { carry = Buffer.alloc(0); offset = pos; }
+    }
+    return { lines, offset };
+  } finally { fs.closeSync(fd); }
 }
 
 // When the session's agent loop last did something (the time of its last loop event in these lines), or null.

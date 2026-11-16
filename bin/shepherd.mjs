@@ -2,15 +2,17 @@
 // `shepherd status [--json]` reads the app's sessions; `shepherd restore-history <id>` puts back a compressed history;
 // `shepherd watch` is one pass of the health watch (--every keeps it resident, with the quota balancer; --status shows it);
 // `shepherd quota` reads and plans the Copilot quota balancer (status shows its last tick); `shepherd sidebar` plans or applies
-// the sidebar tidy; `shepherd install` loads the launch agent that keeps `watch --every 60` running; `shepherd help`. Only
-// restore-history writes inside a session's history folder; watch and quota write their own state folders; sidebar apply asks
-// the app to show or hide projects; install writes the launch agent (--dry-run writes nothing).
+// the sidebar tidy; `shepherd retire` plans, or applies, the hand-off retirement and the size watch; `shepherd install` loads the
+// launch agent that keeps `watch --every 60` running; `shepherd help`. Only restore-history writes inside a session's history
+// folder; watch, quota, sidebar apply and retire apply write their own state folders; sidebar apply asks the app to show or hide
+// projects; install writes the launch agent (--dry-run writes nothing). Plans change nothing.
 // Exit codes: 0 ok, 1 the app's data could not be read, a history could not be restored, the agent could not load, or the app
 // refused a sidebar change, 2 usage.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ShepherdError, deps, quotaConfig, quotaRead, quotaStatus, quotaTick, restoreHistory, sidebarConfig, sidebarFile, sidebarTidy, renderSidebar, snapshot, stateDir } from '../src/index.mjs';
+import { renderRetire, retireConfig, retireDeps, retireFile, watchRetire } from '../src/retire.mjs';
 import { counts, healthDeps, pass, readWatch, renderWatch } from '../src/health-watch.mjs';
 import { install } from '../src/install.mjs';
 import { renderQuota, renderReadings } from '../src/quota.mjs';
@@ -28,6 +30,8 @@ const USAGE = `shepherd: keeps the flock: the GitHub Copilot app's sessions, as 
                                                    status: the last tick (default)
   shepherd sidebar [plan|apply] [--json]           which projects the sidebar shows (a home, or a session); plan changes
                                                    nothing (default); apply needs sidebar.json to say "enabled": true
+  shepherd retire [plan|apply] [--json]            hand-off retirement and the size watch: plan (default) changes nothing;
+                                                   apply archives, flags and asks, and only when retire.json enables it
   shepherd install [--dry-run]                     load the launch agent that runs "watch --every 60 --quiet" (--dry-run prints it)
   shepherd version [--json]                        the installed version (also --version)
   shepherd help                                    this text
@@ -41,11 +45,13 @@ const FLAGS = {
   watch: ['json', 'quiet', 'status', 'copilot-home', 'every'],
   quota: ['json', 'copilot-home', 'id'],
   sidebar: ['json', 'copilot-home', 'id'],
+  retire: ['json', 'copilot-home', 'id'],
   install: ['dry-run'],
 };
 
 const QUOTA_SUBS = ['read', 'plan', 'status'];
 const SIDEBAR_SUBS = ['plan', 'apply'];
+const RETIRE_SUBS = ['plan', 'apply'];
 
 const usage = (problem, fix) => {
   process.stderr.write(`shepherd: usage: ${problem}. Fix: ${fix}.\n`);
@@ -77,6 +83,7 @@ function parse(argv) {
   if (verb === 'restore-history' && opts.id === null) return { error: ['restore-history needs a session id', 'shepherd restore-history <id>'] };
   if (verb === 'quota' && opts.id !== null && !QUOTA_SUBS.includes(opts.id)) return { error: [`quota takes read, plan or status, not "${opts.id}"`, 'shepherd quota status'] };
   if (verb === 'sidebar' && opts.id !== null && !SIDEBAR_SUBS.includes(opts.id)) return { error: [`sidebar takes plan or apply, not "${opts.id}"`, 'shepherd sidebar plan'] };
+  if (verb === 'retire' && opts.id !== null && !RETIRE_SUBS.includes(opts.id)) return { error: [`retire takes plan or apply, not "${opts.id}"`, 'shepherd retire plan'] };
   if (verb === 'watch' && opts.every !== null && opts.status) return { error: ['--every and --status cannot be used together', 'shepherd watch --status'] };
   return { verb, opts };
 }
@@ -154,6 +161,19 @@ async function sidebar({ id, json, copilotHome }) {
   if (out.done.some((d) => !d.ok)) process.exitCode = 1;
 }
 
+async function retire({ id, json, copilotHome }) {
+  const sub = id ?? 'plan';
+  const file = retireFile();
+  if (sub === 'apply' && !retireConfig(file).enabled) {
+    usage(`retire apply is off, because ${file} does not say "enabled": true`, `set "enabled": true in ${file}, or run shepherd retire plan`);
+    return;
+  }
+  const r = await watchRetire(retireDeps({ copilotHome }), { apply: sub === 'apply' });
+  if (json) process.stdout.write(`${JSON.stringify(r)}\n`);
+  else process.stdout.write(`${renderRetire(r)}\n`);
+  if (r.errors.length) process.exitCode = 1;
+}
+
 async function installAgent({ dryRun }) {
   const r = await install({ dry: dryRun });
   if (dryRun) { process.stdout.write(r.text); return; }
@@ -179,6 +199,7 @@ else {
     else if (parsed.verb === 'install') await installAgent(parsed.opts);
     else if (parsed.verb === 'quota') await quota(parsed.opts);
     else if (parsed.verb === 'sidebar') await sidebar(parsed.opts);
+    else if (parsed.verb === 'retire') await retire(parsed.opts);
     else await restore(parsed.opts);
   } catch (e) {
     if (e instanceof ShepherdError) process.stderr.write(`shepherd: ${e.code}: ${e.message}\n`);

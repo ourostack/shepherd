@@ -34,7 +34,7 @@ flowchart LR
 | A safe point before a restart | moving here |
 | Resume after a restart or crash | here now |
 | The 500 MB resume cap | here now |
-| Size watch and hand-off retirement | moving here |
+| Size watch and hand-off retirement | here now, off until `retire.json` enables it |
 | Stuck resume, and the six-hour health watch | here now |
 | Billing account and quota | here now |
 | Sidebar tidy | here now |
@@ -44,22 +44,25 @@ flowchart LR
 ## CLI
 
 ```sh
-npx github:ourostack/shepherd#v0.5.0 status                # one line per local session
-npx github:ourostack/shepherd#v0.5.0 status --json         # the same as data
-npx github:ourostack/shepherd#v0.5.0 restore-history <id>  # put back an archived session's compressed history
-npx github:ourostack/shepherd#v0.5.0 watch --status        # what the health watch is following
-npx github:ourostack/shepherd#v0.5.0 quota                 # each Copilot account's quota, and the balancer's last tick
-npx github:ourostack/shepherd#v0.5.0 sidebar               # which projects the sidebar shows, and what apply would change
-npx github:ourostack/shepherd#v0.5.0 help
+npx github:ourostack/shepherd#v0.6.0 status                # one line per local session
+npx github:ourostack/shepherd#v0.6.0 status --json         # the same as data
+npx github:ourostack/shepherd#v0.6.0 restore-history <id>  # put back an archived session's compressed history
+npx github:ourostack/shepherd#v0.6.0 retire plan          # what retirement and the size watch would archive, flag or ask
+npx github:ourostack/shepherd#v0.6.0 watch --status        # what the health watch is following
+npx github:ourostack/shepherd#v0.6.0 quota                 # each Copilot account's quota, and the balancer's last tick
+npx github:ourostack/shepherd#v0.6.0 sidebar               # which projects the sidebar shows, and what apply would change
+npx github:ourostack/shepherd#v0.6.0 help
 ```
 
-Read-only except `restore-history`, `watch`, `install`, an applied quota tick and `sidebar apply` (their own state, log and waiting files, and the app's sidebar). `quota read`, `quota plan`, `quota status` and `sidebar` (plan) change nothing. Exit codes: 0 ok, 1 the app's data could not be read, the history could not be restored, the agent could not load, or the app refused a sidebar change, 2 usage.
+Read-only except `restore-history`, `watch`, `install`, an applied quota tick, `sidebar apply` and `retire apply` (their own state, log and waiting files, the app's sidebar, and the archive log). `quota read`, `quota plan`, `quota status`, `sidebar` (plan) and `retire plan` change nothing. Exit codes: 0 ok, 1 the app's data could not be read, the history could not be restored, the agent could not load, or the app refused a sidebar change, 2 usage.
 
 ## Run it always
 
 `shepherd install` writes `~/Library/LaunchAgents/bot.ouro.shepherd.plist` and loads it. The agent runs `shepherd watch --every 60 --quiet` and is kept alive, so every 60 seconds one pass runs the health watch, then the quota balancer, then the sidebar tidy (at most every `everyMinutes`), with no one at a terminal. Its log is `~/Library/Logs/shepherd-watch.launchd.log`. `shepherd install --dry-run` prints the plist and changes nothing.
 
 The health watch follows each session that a resume sent a message to, for six hours. It asks a silent, erroring or stuck session once more, and tells the agent by name only about a session that stays broken.
+
+The same pass then runs the retire duties, once `~/.config/shepherd/retire.json` says `"enabled": true` (see Retirement). With no file it does nothing, so it never runs alongside Ouroboros' copy while that still runs.
 
 ## Sidebar tidy
 
@@ -80,6 +83,17 @@ It is off until you configure it. Write `~/.config/shepherd/sidebar.json`:
 - `everyMinutes`: how often the resident watch applies the tidy (default 30).
 
 `SHEPHERD_SIDEBAR_CONFIG` overrides the file. `shepherd sidebar` (or `plan`) shows what would change and changes nothing; `shepherd sidebar apply` makes the changes now and needs `"enabled": true`.
+
+## Retirement
+
+The sidebar should show live jobs only. Two kinds of session leave it, through the app's archive (reversible, worktree kept), and each is logged in `<state>/retire-log.jsonl`:
+
+- **Handed off.** A session whose job has a newer owner: a later session's first message says `Succeeds: <its id>`. It goes once that successor has taken its first turn and it has been idle for five minutes.
+- **Finished.** An idle session whose coordinator is archived or gone, with no open pull request and no automation, and no turn for 24 hours.
+
+Neither goes while it runs, waits on a person, is stuck, or while a session it coordinates still works. The **size watch** covers histories over the 500 MB resume cap: it flags them never-resume, asks the coordinator (and the session itself while it runs) to hand off, asks again each time one grows by half, and archives one that sits idle 30 minutes after its last ask (at once under memory pressure). A session that is not running and has no smaller coordinator is never messaged, because that would reload it; the owner is told through the agent instead.
+
+`shepherd retire plan` says what would happen and changes nothing. `shepherd retire apply` does it, and refuses unless the config enables it. The config is `~/.config/shepherd/retire.json` (`SHEPHERD_RETIRE_CONFIG` overrides the path): `{ "enabled": true }`.
 
 ## Quota balancing
 
@@ -123,7 +137,9 @@ await archive(d, { ...sessions[0], workspaceType: "worktree" }, { keepWorktree: 
 - `compressHistory(deps, id, { dryRun })` and `restoreHistory(deps, id)`: gzip an archived session's `events.jsonl` (never a live one, never an open one) and gunzip it back. Each compression appends a `history-compressed` row to the disk ledger.
 - `exchange(copilotHome, messages, { done, keep, waitMs })` and `appReady(deps)`: one conversation with the app's socket.
 - `resume(deps, { targets, startedAt, restartedAt, why, lanes, t, log })`: one resume message to each target, then a wait for its turn. `targets` is `pickTargets({ before, after, also })`, from the snapshots the caller took (after its `RESUME_T.grace` wait and its skip list). A history over the cap is held (`deps.heldBack`), never sent. When anything resumed, `<state>/resume-last.json` is written for the health watch. `resumeText({ at, why, lanes })` is the message; `RESUME_T` holds the default timings.
-- `loopState`, `lastTurnAt`, `continuedSince`, `tookTurnSince`, `lastReply`, `readTail`, `READY`, `DEFER`: the pure readers of a session's history.
+- `rows(deps)`: the sidebar's sessions with their state, coordinator, open pull request and automation, read over the app's socket.
+- `retireSessions(rows, deps, { apply })`, `noticeOversizedSessions(rows, deps, { apply })` and `watchRetire(deps, { apply })`: the retire duties and the size watch (see Retirement). `apply` false is a plan. `retireConfig()` reads `retire.json`.
+- `loopState`, `lastTurnAt`, `continuedSince`, `tookTurnSince`, `lastReply`, `READY`, `DEFER`, and `readTail(file, bytes?, { keepPartial? })`: the pure readers of a session's history.
 - `ShepherdError` carries `code`, `problem` and `fix`; its message reads `<problem>. Fix: <fix>.`
 - `quotaConfig(file?)`, `quotaRead(deps, cfg?)`, `quotaTick(deps, { apply, only, cfg, now })`, `quotaStatus()` and `listenQuota(deps, { log, file, retryMs })`: the quota balancer (see Quota balancing). A tick with `apply` does nothing unless the config says `"enabled": true`.
 - `sidebarConfig(file?)`, `sidebarPlan(projects, sessions, { homes })` (pure) and `sidebarTidy(deps, { homes, apply })`: the sidebar tidy (see Sidebar tidy). `sidebarTidy` reads the database and, with `apply`, sends the app only the show or hide requests that change a project.
