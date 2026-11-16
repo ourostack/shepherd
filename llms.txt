@@ -1,0 +1,27 @@
+# @ouro.bot/shepherd
+
+Shepherd keeps the GitHub Copilot app's sessions as work. Plain ESM, no build step, no runtime dependencies, Node 22.18 or newer.
+
+## Library
+
+- `import { deps, snapshot, sendTo, archive, exchange, appReady } from '@ouro.bot/shepherd'`
+- `deps({ copilotHome })` returns `{ now, sleep, sql, history, historySize, exchange }`. `sql` is a read-only query of `<copilotHome>/data.db`.
+- `snapshot(deps, now?, skip?)` returns one object per local, unarchived session: `id`, `title`, `mode`, `state` (`busy` or `idle`), `why`, `running`, `interrupted`, `workspaceId`. Sessions over 500 MB, or idle for over 24 h, are `idle` with a `why`.
+- `sendTo(deps, id, prompt, waitMs)` returns `{ ok, reply, error }`.
+- `archive(deps, row, { keepWorktree, waitMs })` archives `row.workspaceId` as a workspace, deleting its worktree only when `row.workspaceType === 'worktree'` and `keepWorktree` is not set. Without a workspace it archives the session. Returns `{ ok, session_id, error }`.
+- `exchange(copilotHome, messages, { done, keep, waitMs })` and `appReady(deps)` talk to the app's socket on `<copilotHome>/run/ws.port` and `ws.token`.
+- `loopState(lines)`, `lastTurnAt(lines)`, `continuedSince(lines, since)`, `tookTurnSince(lines, since)`, `lastReply(lines, since)`, `readTail(file, bytes?)`, and the `READY` and `DEFER` tokens read a session's history.
+- Errors are `ShepherdError` with `code`, `problem` and `fix`; the message reads `<problem>. Fix: <fix>.`
+
+## CLI
+
+- `shepherd status [--json] [--copilot-home <dir>]`: one line per local session.
+- `shepherd help`.
+- Exit codes: 0 ok, 1 the app's data could not be read, 2 usage. Errors are one line.
+
+## Rules
+
+- Shepherd is read-only except `sendTo` and `archive`. It never quits or relaunches the app; that is Housesitter's job.
+- Every failure says what probably happened and the fix.
+- Tests run against fakes (`test/fake-app.mjs` is a pretend socket). The real database test and CLI status test run only where `/usr/bin/sqlite3` exists.
+- Keep it small. A duty moves here only when a caller needs it.

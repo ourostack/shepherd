@@ -1,0 +1,62 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const bin = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'shepherd.mjs');
+const run = (args, env = {}) => spawnSync(process.execPath, [bin, ...args], { encoding: 'utf8', env: { ...process.env, ...env } });
+
+test('shepherd help prints the two verbs and exits 0; an unknown verb or flag is a usage error with the fix', () => {
+  const help = run(['help']);
+  assert.equal(help.status, 0);
+  assert.match(help.stdout, /shepherd status \[--json\]/);
+  const verb = run(['sweep']);
+  assert.equal(verb.status, 2);
+  assert.match(verb.stderr, /shepherd: usage: unknown command "sweep"\. Fix: shepherd help\./);
+  assert.equal(run(['status', '--send']).status, 2);
+});
+
+test('shepherd status with no app database says where it looked and exits 1', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'shepherd-cli-'));
+  try {
+    const r = run(['status', '--json', '--copilot-home', home]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /^shepherd: no-database: there is no GitHub Copilot app database at .*data\.db\. Fix: open the GitHub Copilot app/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+const haveSqlite = spawnSync('/usr/bin/sqlite3', ['-version']).status === 0;
+
+test('shepherd status --json reads a pretend app database and history: busy, idle and the size of each', { skip: !haveSqlite && 'needs /usr/bin/sqlite3' }, () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'shepherd-status-'));
+  try {
+    const now = Date.now();
+    const ev = (type, data = {}) => JSON.stringify({ type, data, timestamp: new Date(now).toISOString() });
+    const sql = [
+      'CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, mode TEXT, is_running INTEGER, was_interrupted INTEGER, execution_location TEXT, archived_at TEXT);',
+      'CREATE TABLE workspaces (id TEXT, session_id TEXT, archived_at TEXT);',
+      "INSERT INTO sessions VALUES ('aaaaaaaa-1', 'busy one', 'autopilot', 0, 0, 'local', NULL);",
+      "INSERT INTO sessions VALUES ('bbbbbbbb-2', 'idle two', NULL, 0, 0, 'local', NULL);",
+      "INSERT INTO sessions VALUES ('cccccccc-3', 'archived', NULL, 0, 0, 'local', '2026-11-01');",
+    ].join('\n');
+    spawnSync('/usr/bin/sqlite3', [path.join(home, 'data.db')], { input: sql });
+    fs.mkdirSync(path.join(home, 'session-state', 'aaaaaaaa-1'), { recursive: true });
+    fs.writeFileSync(path.join(home, 'session-state', 'aaaaaaaa-1', 'events.jsonl'), `${ev('user.message')}\n${ev('assistant.turn_start')}\n`);
+    fs.mkdirSync(path.join(home, 'session-state', 'bbbbbbbb-2'), { recursive: true });
+    fs.writeFileSync(path.join(home, 'session-state', 'bbbbbbbb-2', 'events.jsonl'), `${ev('assistant.turn_end')}\n`);
+    const r = run(['status', '--json', '--copilot-home', home]);
+    assert.equal(r.status, 0, r.stderr);
+    const { sessions } = JSON.parse(r.stdout);
+    assert.deepEqual(sessions.map((s) => [s.id, s.state]), [['aaaaaaaa-1', 'busy'], ['bbbbbbbb-2', 'idle']], 'the archived session is left out');
+    assert.equal(sessions[0].why, 'mid-turn (last assistant.turn_start)');
+    const text = run(['status', '--copilot-home', home]);
+    assert.match(text.stdout, /^aaaaaaaa  busy one  busy \(mid-turn \(last assistant\.turn_start\)\)  0\.0 MB$/m);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
