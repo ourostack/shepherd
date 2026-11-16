@@ -7,6 +7,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const LABEL = 'bot.ouro.shepherd';
+
+// A Homebrew node runs from a versioned Cellar folder that the next upgrade removes; launchd needs the stable link.
+export function stableNode(execPath, exists = fs.existsSync) {
+  if (!/\/Cellar\//.test(execPath)) return execPath;
+  return ['/opt/homebrew/bin/node', '/usr/local/bin/node'].find((p) => exists(p)) || execPath;
+}
 export const BIN = fileURLToPath(new URL('../bin/shepherd.mjs', import.meta.url));
 export const agentPath = (home = os.homedir()) => path.join(home, 'Library', 'LaunchAgents', `${LABEL}.plist`);
 export const logPath = (home = os.homedir()) => path.join(home, 'Library', 'Logs', 'shepherd-watch.launchd.log');
@@ -42,7 +48,7 @@ const run = (file, argv) => new Promise((res) => {
 });
 
 // Writes the plist and loads it (bootout, then bootstrap). dry: returns the plist text and changes nothing.
-export async function install({ home = os.homedir(), node = process.execPath, bin = BIN, dry = false, uid = process.getuid?.(), launchctl = (a) => run('/bin/launchctl', a) } = {}) {
+export async function install({ home = os.homedir(), node = stableNode(process.execPath), bin = BIN, dry = false, uid = process.getuid?.(), launchctl = (a) => run('/bin/launchctl', a) } = {}) {
   const file = agentPath(home), log = logPath(home);
   const searchPath = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin', path.join(home, '.ouro-cli', 'bin')].join(':');
   const text = watchPlist({ node, bin, log, path: searchPath });

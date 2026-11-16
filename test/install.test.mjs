@@ -46,3 +46,10 @@ test('install --dry-run prints the plist and writes nothing', async () => {
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+test('stableNode: a Homebrew Cellar node becomes the stable link, so an upgrade never breaks the job', async () => {
+  const { stableNode } = await import('../src/install.mjs');
+  const has = (p) => p === '/opt/homebrew/bin/node';
+  assert.equal(stableNode('/opt/homebrew/Cellar/node@22/22.23.4_2/bin/node', has), '/opt/homebrew/bin/node');
+  assert.equal(stableNode('/Users/a/.nvm/versions/node/v22.1.0/bin/node', has), '/Users/a/.nvm/versions/node/v22.1.0/bin/node');
+});
