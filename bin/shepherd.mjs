@@ -7,6 +7,7 @@
 // the app to show or hide projects; install writes the launch agent (--dry-run writes nothing).
 // Exit codes: 0 ok, 1 the app's data could not be read, a history could not be restored, the agent could not load, or the app
 // refused a sidebar change, 2 usage.
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ShepherdError, deps, quotaConfig, quotaRead, quotaStatus, quotaTick, restoreHistory, sidebarConfig, sidebarFile, sidebarTidy, renderSidebar, snapshot, stateDir } from '../src/index.mjs';
@@ -28,6 +29,7 @@ const USAGE = `shepherd: keeps the flock: the GitHub Copilot app's sessions, as 
   shepherd sidebar [plan|apply] [--json]           which projects the sidebar shows (a home, or a session); plan changes
                                                    nothing (default); apply needs sidebar.json to say "enabled": true
   shepherd install [--dry-run]                     load the launch agent that runs "watch --every 60 --quiet" (--dry-run prints it)
+  shepherd version [--json]                        the installed version (also --version)
   shepherd help                                    this text
 
 Exit codes: 0 ok, 1 the app's data could not be read, the history could not be restored, the agent could not load, or the app
@@ -53,6 +55,7 @@ const usage = (problem, fix) => {
 function parse(argv) {
   const [verb, ...rest] = argv;
   if (verb === undefined || verb === 'help' || verb === '--help' || verb === '-h') return { verb: 'help' };
+  if (verb === 'version' || verb === '--version' || verb === '-v') return { verb: 'version', opts: { json: rest.includes('--json') } };
   if (!FLAGS[verb]) return { error: [`unknown command "${verb}"`, 'shepherd help'] };
   const allowed = (flag) => FLAGS[verb].includes(flag);
   const opts = { json: false, quiet: false, status: false, dryRun: false, every: null, id: null, copilotHome: path.join(os.homedir(), '.copilot') };
@@ -165,6 +168,10 @@ async function installAgent({ dryRun }) {
 const parsed = parse(process.argv.slice(2));
 if (parsed.error) usage(...parsed.error);
 else if (parsed.verb === 'help') process.stdout.write(`${USAGE}\n`);
+else if (parsed.verb === 'version') {
+  const { version } = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  process.stdout.write(parsed.opts.json ? `${JSON.stringify({ version })}\n` : `${version}\n`);
+}
 else {
   try {
     if (parsed.verb === 'status') await status(parsed.opts);
