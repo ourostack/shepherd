@@ -37,9 +37,9 @@ flowchart LR
 ## CLI
 
 ```sh
-npx @ouro.bot/shepherd status          # one line per local session
-npx @ouro.bot/shepherd status --json   # the same as data
-npx @ouro.bot/shepherd help
+npx github:ourostack/shepherd#v0.1.0 status          # one line per local session
+npx github:ourostack/shepherd#v0.1.0 status --json   # the same as data
+npx github:ourostack/shepherd#v0.1.0 help
 ```
 
 Read-only. Exit codes: 0 ok, 1 the app's data could not be read, 2 usage.
@@ -49,7 +49,7 @@ Read-only. Exit codes: 0 ok, 1 the app's data could not be read, 2 usage.
 ```js
 import { deps, snapshot, sendTo, archive } from '@ouro.bot/shepherd';
 
-const d = deps({ copilotHome: '~/.copilot' });   // the database, histories, socket and clock
+const d = deps();   // defaults to ~/.copilot: the database, histories, socket and clock
 const sessions = await snapshot(d);               // [{ id, title, state: 'busy'|'idle', why, workspaceId, ... }]
 await sendTo(d, sessions[0].id, 'carry on', 10000);
 await archive(d, { ...sessions[0], workspaceType: "worktree" }, { keepWorktree: false });
