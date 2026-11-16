@@ -1,0 +1,129 @@
+// Reads one session's history (its events.jsonl lines) and says what the session's agent loop was doing. Pure, except readTail.
+import fs from 'node:fs';
+
+export const TAIL_BYTES = 4 * 1024 * 1024;
+export const READY = 'READY-TO-RESTART';
+export const DEFER = 'DEFER';
+
+const LOOP = new Set(['user.message', 'assistant.turn_start', 'assistant.message', 'assistant.turn_end', 'abort', 'session.task_complete',
+  'tool.execution_start', 'tool.execution_complete', 'subagent.started', 'subagent.completed', 'external_tool.requested', 'external_tool.completed']);
+const textOf = (r) => (typeof r === 'string' ? r : r?.content != null ? String(r.content) : JSON.stringify(r ?? ''));
+const parse = (l) => { try { return JSON.parse(l); } catch { return null; } };
+
+// The last `bytes` of a file as lines, without a partial first line. Missing file: no lines.
+export function readTail(f, bytes = TAIL_BYTES) {
+  let fd;
+  try {
+    fd = fs.openSync(f, 'r');
+    const size = fs.fstatSync(fd).size;
+    const len = Math.min(size, bytes);
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, size - len);
+    const lines = buf.toString('utf8').split('\n');
+    return len < size ? lines.slice(1) : lines;
+  } catch { return []; } finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+
+// When the session's agent loop last did something (the time of its last loop event in these lines), or null.
+export function lastTurnAt(lines) {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const l = lines[i];
+    if (!l) continue;
+    const e = parse(l);
+    if (e && LOOP.has(e.type) && Date.parse(e.timestamp || '') > 0) return Date.parse(e.timestamp);
+  }
+  return null;
+}
+
+// Was this session's agent loop working when its history ended? Mid-turn, between turns that asked for tools, with a
+// subagent running, or waiting on an async shell or background agent that never reported back. A person's stop, a
+// finished task and a plain finished turn are not work.
+export function loopState(lines) {
+  let last = null, lastMsg = null, running = 0, finished = false;
+  let shells = new Map(), agents = new Map();
+  const starts = new Map();
+  for (const l of lines) {
+    if (!l) continue;
+    const e = parse(l);
+    if (!e) continue;
+    const d = e.data || {};
+    if (e.type === 'session.start' || e.type === 'session.resume') { shells = new Map(); agents = new Map(); running = 0; }
+    if (e.type === 'tool.execution_start') starts.set(d.toolCallId, d);
+    if (e.type === 'tool.execution_complete') {
+      const s = starts.get(d.toolCallId);
+      const out = textOf(d.result);
+      if (s?.toolName === 'bash' && s.arguments?.mode === 'async') {
+        const id = (out.match(/shellId:\s*([^\s>"\\]+)/) || [])[1] || s.arguments?.shellId;
+        if (id && !/completed with exit code|has completed/i.test(out)) shells.set(String(id), s.arguments?.description || 'shell');
+      }
+      if (s && (s.toolName === 'read_bash' || s.toolName === 'stop_bash') && s.arguments?.shellId != null) {
+        if (s.toolName === 'stop_bash' || /completed with exit code|has completed|no (such )?shell|not found|stopped/i.test(out)) shells.delete(String(s.arguments.shellId));
+      }
+    }
+    if (e.type === 'system.notification') {
+      const k = d.kind || {};
+      if (k.shellId != null) shells.delete(String(k.shellId));
+      if (k.agentId) agents.delete(k.agentId);
+    }
+    if (e.type === 'subagent.started' && d.executionMode === 'background') { agents.set(e.agentId || d.toolCallId, d.agentDisplayName || d.agentName || 'agent'); continue; }
+    if ((e.type === 'subagent.completed' || e.type === 'subagent.failed') && agents.has(e.agentId || d.toolCallId)) { agents.delete(e.agentId || d.toolCallId); continue; }
+    if (!LOOP.has(e.type)) continue;
+    if (e.type === 'abort' && d.reason && d.reason !== 'user_initiated') continue;
+    if (e.type === 'subagent.started') running++;
+    if (e.type === 'subagent.completed') running = Math.max(0, running - 1);
+    if (e.type === 'assistant.message') { lastMsg = e; finished = false; }
+    if (e.type === 'session.task_complete') finished = true;
+    if (e.type === 'user.message') { lastMsg = null; running = 0; finished = false; }
+    last = e.type;
+  }
+  const owed = [...[...shells.values()].map((x) => `shell "${x}"`), ...[...agents.values()].map((x) => `background agent ${x}`)];
+  if (last === 'abort') return { working: false, why: 'stopped by the person' };
+  if (last === 'session.task_complete' || (last === 'assistant.turn_end' && finished)) return { working: false, why: 'task complete' };
+  if (last === 'assistant.turn_end') {
+    const asked = (lastMsg?.data?.toolRequests || []).length > 0;
+    if (asked) return { working: true, why: 'between turns (its last turn called tools and no next turn started)' };
+    if (running > 0) return { working: true, why: `${running} subagent(s) still running` };
+    if (owed.length) return { working: true, why: `waiting on ${owed.slice(0, 3).join(', ')}` };
+    return { working: false, why: 'its turn had ended' };
+  }
+  return last ? { working: true, why: `mid-turn (last ${last})` } : { working: false, why: 'no agent activity' };
+}
+
+// Did anything (a person, a resumer, a queue) send the session a message after `since`?
+export function continuedSince(lines, since) {
+  for (const l of lines) {
+    if (!l || !/"type":"user\.message"/.test(l.slice(0, 80))) continue;
+    const e = parse(l);
+    if (e && Date.parse(e.timestamp || '') > since) return true;
+  }
+  return false;
+}
+
+// Did the session start a new agent turn after `since`?
+export function tookTurnSince(lines, since) {
+  for (const l of lines) {
+    if (!l || !/"type":"assistant\.turn_start"/.test(l.slice(0, 80))) continue;
+    const e = parse(l);
+    if (e && Date.parse(e.timestamp || '') > since) return true;
+  }
+  return false;
+}
+
+// What the session last answered after `since`: { kind: 'ready', at } or { kind: 'defer', at, lanes, minutes }, or null.
+// An answer is a line of its own: READY-TO-RESTART, or DEFER: <n> lanes running, optionally with about <m> min.
+export function lastReply(lines, since) {
+  let out = null;
+  for (const l of lines) {
+    if (!l || !l.includes('assistant.message')) continue;
+    const e = parse(l);
+    const at = Date.parse(e?.timestamp || '');
+    if (e?.type !== 'assistant.message' || !(at > since)) continue;
+    for (const raw of String(e.data?.content ?? '').split('\n')) {
+      const line = raw.replace(/[`*_]/g, '').trim();
+      if (line.replace(/[\s.]/g, '') === READY) out = { kind: 'ready', at };
+      const d = line.match(new RegExp(`^${DEFER}\\s*:\\s*(\\d+)\\s+lanes?\\s+running(?:\\s*,?\\s*about\\s+(\\d+)\\s*min)?`, 'i'));
+      if (d) out = { kind: 'defer', at, lanes: Number(d[1]), minutes: d[2] == null ? null : Number(d[2]) };
+    }
+  }
+  return out;
+}
