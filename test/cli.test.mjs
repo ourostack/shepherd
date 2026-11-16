@@ -82,3 +82,32 @@ test('shepherd restore-history puts a compressed history back and says so', { sk
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+test('shepherd watch with nothing to follow says so and exits 0; watch --status reads its state; flags a verb does not take are usage errors', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'shepherd-watchcli-'));
+  try {
+    const env = { HOME: home };
+    const w = run(['watch'], env);
+    assert.equal(w.status, 0, w.stderr);
+    assert.equal(w.stdout, 'health watch: nothing to follow yet\n');
+    assert.equal(run(['watch', '--quiet'], env).stdout, '');
+    assert.deepEqual(JSON.parse(run(['watch', '--status', '--json'], env).stdout), { watch: null, last_pass: null, counts: null });
+    assert.equal(run(['status', '--quiet']).status, 2);
+    assert.equal(run(['install', '--json']).status, 2);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('shepherd install --dry-run prints the launch agent and writes nothing', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'shepherd-installcli-'));
+  try {
+    const r = run(['install', '--dry-run'], { HOME: home });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /<key>Label<\/key><string>bot\.ouro\.shepherd<\/string>/);
+    assert.match(r.stdout, /<string>watch<\/string>\s*<string>--quiet<\/string>/);
+    assert.deepEqual(fs.readdirSync(home), []);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
