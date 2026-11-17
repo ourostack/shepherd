@@ -22,6 +22,7 @@ import { rows } from './rows.mjs';
 import { DELIVER_MS, archiveRow, identityId } from './store.mjs';
 import { deps } from './sessions.mjs';
 import { sendTo } from './socket.mjs';
+import { landedGate } from './landed.mjs';
 import { noticeOversizedSessions, whereItLeftOff } from './size-watch.mjs';
 
 export const HANDOFF_QUIET_MS = 5 * 60_000;
@@ -78,6 +79,7 @@ export async function retireSessions(listed, d, { apply = false } = {}) {
   const busyChildren = (id, except) => childrenOf(id).filter((child) => child.id !== except && !(settled(child) || (child.remote && !child.isRunning)));
   const entries = [];
   const gone = new Set();
+  const gated = new Set();
 
   for (const row of listed) {
     if (!settled(row) || now - quietSince(row) < HANDOFF_QUIET_MS) continue;
@@ -90,6 +92,8 @@ export async function retireSessions(listed, d, { apply = false } = {}) {
       entries.push({ what: 'hold', id: row.id, name: row.name, reason: 'handed-off', done: false, why: `held while sessions it coordinates still work: ${busy.map((c) => short(c.id)).join(', ')}` });
       continue;
     }
+    const gate = await landedGate(row, d, apply, 'handed-off');
+    if (gate) { entries.push(gate); gated.add(row.id); continue; }
     const heir = byId.get(successor);
     // The app deletes an archived session's automation, and restoring it does not bring it back.
     const why = `succeeded by ${heir ? `"${plain(heir.name, 60)}" ` : ''}(${short(successor)}); ${whereItLeftOff(row, d)}${row.automation ? '; its automation was removed with it' : ''}`;
@@ -101,7 +105,7 @@ export async function retireSessions(listed, d, { apply = false } = {}) {
   }
 
   for (const row of listed) {
-    if (gone.has(row.id) || !settled(row) || row.openPullRequest || row.automation) continue;
+    if (gone.has(row.id) || gated.has(row.id) || !settled(row) || row.openPullRequest || row.automation) continue;
     const coordinator = recordedCoordinator(row);
     if (!coordinator || (byId.has(coordinator) && !gone.has(coordinator))) continue;
     // The recorded coordinator may have handed off: a lane that a live successor or the session it reports to still
@@ -109,6 +113,8 @@ export async function retireSessions(listed, d, { apply = false } = {}) {
     const live = coordinatorOf(row, listed, { d, successorOf: (id) => successorOf(id, successions) });
     if (live && 'id' in live && !gone.has(live.id)) continue;
     if (now - quietSince(row) < FINISHED_IDLE_MS || busyChildren(row.id, null).length) continue;
+    const gate = await landedGate(row, d, apply, 'finished');
+    if (gate) { entries.push(gate); continue; }
     const why = `${row.detail || 'idle'}; ${whereItLeftOff(row, d)}`;
     if (apply && !(await doArchive(d, row, 'finished', why))) continue;
     gone.add(row.id);

@@ -12,6 +12,7 @@ import { coordinatorOf, handoffSuccessors } from './coordinator.mjs';
 import { readTail } from './history.mjs';
 import { MAX_HISTORY_BYTES } from './sessions.mjs';
 import { mb, plain } from './notice.mjs';
+import { landedGate } from './landed.mjs';
 import { DELIVER_MS, archiveRow, readJson, sessionsRoot, statePath, writeJson } from './store.mjs';
 import { sendTo } from './socket.mjs';
 
@@ -179,6 +180,8 @@ export async function noticeOversizedSessions(listed, d, { apply = true } = {}) 
     const where = whereItLeftOff(row, d);
     const reason = pressed ? 'memory-pressure' : 'oversize-idle';
     const why = `${mb(entry.bytes)}; ${where}`;
+    const gate = await landedGate(row, d, apply, reason);
+    if (gate) { actions.push(gate); continue; }
     if (!apply) { actions.push({ what: 'archive', id: row.id, name: row.name, reason, done: false, why }); continue; }
     if (!(await doArchive(d, row, reason, why))) continue;
     entry.archivedAt = at;

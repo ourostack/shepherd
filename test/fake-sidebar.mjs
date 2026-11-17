@@ -30,7 +30,7 @@ export function fakeApp({ workspaces = [], chats = [] } = {}) {
 // ledger are the test fakes (zlib, an in-memory array).
 export function testDeps(home, { now = NOW, app = fakeApp(), state = path.join(home, 'state') } = {}) {
   const base = deps({ copilotHome: home, state });
-  return { ...base, ...fakeHistoryDeps(home, { ledger: [] }), now: () => now, exchange: app.exchange, state, tell: async () => ({ ok: true, error: null }) };
+  return { ...base, ...fakeHistoryDeps(home, { ledger: [] }), now: () => now, checkLanded: async () => ({ outcome: 'clean' }), exchange: app.exchange, state, tell: async () => ({ ok: true, error: null }) };
 }
 
 // A history file with these events, each { type, data, at } (at defaults to now): the lines are JSON, one event each.
