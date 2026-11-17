@@ -13,13 +13,13 @@ const run = (args, env = {}) => spawnSync(process.execPath, [bin, ...args], { en
 test('shepherd help prints the two verbs and exits 0; an unknown verb or flag is a usage error with the fix', () => {
   const help = run(['help']);
   assert.equal(help.status, 0);
-  assert.match(help.stdout, /shepherd status \[--json\]/);
+  assert.match(help.stdout, /status {12}each local session/);
   const verb = run(['sweep']);
   assert.equal(verb.status, 2);
-  assert.match(verb.stderr, /shepherd: usage: unknown command "sweep"\. Fix: shepherd help\./);
+  assert.match(verb.stderr, /shepherd: sweep: there is no command "sweep".*Fix: shepherd --help\./);
   assert.equal(run(['status', '--send']).status, 2);
   assert.equal(run(['restore-history']).status, 2);
-  assert.match(run(['restore-history']).stderr, /restore-history needs a session id\. Fix: shepherd restore-history <id>\./);
+  assert.match(run(['restore-history']).stderr, /restore-history: needs <id>\. Fix: shepherd restore-history <id>\./);
 });
 
 test('shepherd status with no app database says where it looked and exits 1', () => {
@@ -101,7 +101,7 @@ test('shepherd watch with nothing to follow says so and exits 0; watch --status 
 
 test('shepherd sidebar: a bad sub-command is a usage error; apply with the config off says how to turn it on', () => {
   assert.equal(run(['sidebar', 'sweep']).status, 2);
-  assert.match(run(['sidebar', 'sweep']).stderr, /shepherd: usage: sidebar takes plan or apply, not "sweep"\. Fix: shepherd sidebar plan\./);
+  assert.match(run(['sidebar', 'sweep']).stderr, /shepherd: sidebar: it takes plan or apply, not "sweep"\. Fix: shepherd sidebar plan\./);
   const r = run(['sidebar', 'apply'], { SHEPHERD_SIDEBAR_CONFIG: path.join(os.tmpdir(), 'shepherd-no-sidebar-config.json') });
   assert.equal(r.status, 1);
   assert.match(r.stderr, /^shepherd: sidebar-off: the sidebar tidy is off: .* does not say "enabled": true\. Fix: set "enabled": true and "homes" in .*, then run shepherd sidebar apply\.$/m);
@@ -122,7 +122,7 @@ test('shepherd install --dry-run prints the launch agent and writes nothing', ()
 
 test('shepherd quota and watch --every: bad arguments are usage errors; quota status says when no tick has run', () => {
   assert.equal(run(['quota', 'sweep']).status, 2);
-  assert.match(run(['quota', 'sweep']).stderr, /shepherd: usage: quota takes read, plan or status, not "sweep"\. Fix: shepherd quota status\./);
+  assert.match(run(['quota', 'sweep']).stderr, /shepherd: quota: it takes read or plan or status, not "sweep"\. Fix: shepherd quota status\./);
   assert.equal(run(['watch', '--every', '0']).status, 2);
   assert.equal(run(['watch', '--every', '60', '--status']).status, 2);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shepherd-quota-cli-'));
@@ -147,7 +147,7 @@ test('shepherd retire: apply is refused while retire.json is off, a bad subcomma
     const env = { SHEPHERD_RETIRE_CONFIG: path.join(home, 'retire.json') };
     const apply = run(['retire', 'apply', '--copilot-home', home], env);
     assert.equal(apply.status, 2);
-    assert.match(apply.stderr, /shepherd: usage: retire apply is off, because .*retire\.json does not say "enabled": true\. Fix: set "enabled": true/);
+    assert.match(apply.stderr, /shepherd: retire: apply is off, because .*retire\.json does not say "enabled": true\. Fix: set "enabled": true/);
     assert.equal(run(['retire', 'sweep'], env).status, 2);
     const plan = run(['retire', '--copilot-home', home], env);
     assert.equal(plan.status, 1);

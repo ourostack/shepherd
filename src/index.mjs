@@ -8,8 +8,7 @@ export { config as quotaConfig, listen as listenQuota, readAll as quotaRead, sta
 export { renderSidebar, sidebarConfig, sidebarFile, sidebarPlan, tidy as sidebarTidy } from './sidebar.mjs';
 export { rows } from './rows.mjs';
 export { applyFrame, listenPrompts } from './prompts.mjs';
-export { AGENT_VERBS, parseAgentVerb, renderText, runAgent, runOperation } from './agent-cli.mjs';
-export { SESSION_STATES, answer, archiveSession, automation, automationOf, create, deliver, findSession, messages, plan, readMessages, runWorkflow, send, session, sessions, show, workflows } from './operate.mjs';
+export { SESSION_STATES, answer, archiveSession, automation, automationOf, create, deliver, findSession, messages, plan, readMessages, runOperation, runWorkflow, send, session, sessions, show, workflows } from './operate.mjs';
 export { retireConfig, retireDeps, retireFile, retireSessions, watchRetire } from './retire.mjs';
 export { noticeOversizedSessions, whereItLeftOff } from './size-watch.mjs';
 export { planWakes, readWakeStates, runDueWakes, runWakeRunners, runnerDeps, wakeStatusLines, wakesConfig, wakesFile } from './wakes.mjs';
