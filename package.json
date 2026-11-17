@@ -1,9 +1,11 @@
 {
   "name": "@ouro.bot/shepherd",
-  "version": "0.10.1",
+  "version": "0.11.0",
   "description": "Shepherd keeps the flock: the GitHub Copilot app's sessions, as work. A small library and CLI to read, message and archive them through the app's local socket and database.",
   "type": "module",
-  "bin": { "shepherd": "bin/shepherd.mjs" },
+  "bin": {
+    "shepherd": "bin/shepherd.mjs"
+  },
   "exports": {
     ".": {
       "types": "./src/index.d.ts",
@@ -11,14 +13,32 @@
     }
   },
   "types": "./src/index.d.ts",
-  "files": ["bin", "src", "lib", "README.md", "LICENSE", "llms.txt"],
-  "engines": { "node": ">=22.18" },
+  "files": [
+    "bin",
+    "src",
+    "lib",
+    "README.md",
+    "LICENSE",
+    "llms.txt"
+  ],
+  "engines": {
+    "node": ">=22.18"
+  },
   "scripts": {
     "test": "node --test test/*.test.mjs"
   },
-  "keywords": ["github-copilot", "copilot-app", "sessions", "agents", "shepherd"],
+  "keywords": [
+    "github-copilot",
+    "copilot-app",
+    "sessions",
+    "agents",
+    "shepherd"
+  ],
   "homepage": "https://ouroboros.bot/shepherd/",
-  "repository": { "type": "git", "url": "git+https://github.com/ourostack/shepherd.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ourostack/shepherd.git"
+  },
   "bugs": "https://github.com/ourostack/shepherd/issues",
   "license": "MIT",
   "author": "Ari Mendelow",
