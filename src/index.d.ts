@@ -357,3 +357,11 @@ export function runWorkflow(deps: Deps, id: string): Promise<AgentOperation>;
 /** Listens for the questions and plans the app's sessions ask, and records them for answer and plan. */
 export function listenPrompts(deps: Deps, opts?: { retryMs?: number; now?: () => number }): { stop(): void };
 export function applyFrame(pending: Record<string, unknown>, frame: Record<string, unknown>, at: string): boolean;
+
+export function trustFile(env?: Record<string, string | undefined>, home?: string): string;
+/** The trust config from trust.json (SHEPHERD_TRUST_CONFIG overrides the path). No file: { enabled: false }. */
+export function trustConfig(file?: string): { enabled: boolean };
+/** The local repository projects the app has not trusted. Changes nothing. */
+export function untrusted(deps: Deps): Promise<{ id: string; name: string }[]>;
+/** Writes the app's trust rows for every untrusted local repository project, in one transaction. Idempotent. */
+export function trustAll(deps: Deps, now?: number): Promise<{ trusted: { id: string; name: string }[]; skipped: string | null }>;

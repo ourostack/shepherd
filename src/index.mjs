@@ -14,3 +14,4 @@ export { retireConfig, retireDeps, retireFile, retireSessions, watchRetire } fro
 export { noticeOversizedSessions, whereItLeftOff } from './size-watch.mjs';
 export { planWakes, readWakeStates, runDueWakes, runWakeRunners, runnerDeps, wakeStatusLines, wakesConfig, wakesFile } from './wakes.mjs';
 export { resumeStuck, stuckPlan, stuckResumeConfig, stuckResumeFile } from './stuck-resume.mjs';
+export { trustAll, trustConfig, trustFile, untrusted } from './trust.mjs';

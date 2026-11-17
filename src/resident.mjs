@@ -1,6 +1,6 @@
 // `shepherd watch --every <s>`: the resident mode the launch agent runs. Each pass runs every duty in turn (the health
 // watch, then the quota balancer's tick, with apply, then the sidebar tidy, then the retire duty: hand-off retirement and the
-// size watch, then the wake runners and the stuck resume, each once its config enables it). Passes never overlap, and a duty
+// size watch, then the wake runners, the stuck resume and the repository trust, each once its config enables it). Passes never overlap, and a duty
 // that throws is logged while the next one still runs.
 import { deps } from './sessions.mjs';
 import { healthDeps, pass } from './health-watch.mjs';
@@ -10,6 +10,7 @@ import { actionLine, retireConfig, retireDeps, watchRetire } from './retire.mjs'
 import { rows as sessionRows } from './rows.mjs';
 import { runDueWakes, wakesConfig } from './wakes.mjs';
 import { resumeStuck, stuckResumeConfig } from './stuck-resume.mjs';
+import { trustAll, trustConfig } from './trust.mjs';
 import { listenPrompts } from './prompts.mjs';
 
 // Runs the duties every everyMs until stop() is true. The clock and the sleep are injected, so a test can run it on a fake one.
@@ -95,6 +96,15 @@ export function watchDuties({ copilotHome, quiet = false, say = () => {}, log = 
         const d = deps({ copilotHome });
         const resumed = await resumeStuck(await sessionRows(d), d);
         if (!quiet && resumed) say(`stuck resume: ${resumed} session(s) resumed`);
+      },
+    },
+    {
+      name: 'trust',
+      run: async () => {
+        if (!trustConfig().enabled) return;
+        const r = await trustAll(deps({ copilotHome }));
+        if (r.skipped) log(`shepherd: trust: ${r.skipped}`);
+        for (const p of r.trusted) log(`shepherd: trust: trusted ${p.name} (${p.id})`);
       },
     },
   ];
