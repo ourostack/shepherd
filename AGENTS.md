@@ -1,9 +1,9 @@
 # AGENTS.md
 
-Shepherd is the shared library for the GitHub Copilot app's sessions: read them, message them, archive them.
+Shepherd keeps the GitHub Copilot app's sessions, as work: the one library and CLI that read them, message them, resume them and archive them, and the resident watch that runs their duties.
 
-- Belongs here: the app's socket and database, the session histories, the pure readers of a history, and `shepherd status`.
-- Belongs in Housesitter, not here: quitting, relaunching and resuming the app, the Mac's processes, the keeper and the launch agents.
+- Belongs here: the app's socket and database, the session histories and their readers, and every session duty: resume, the health watch, size and retirement, stuck resume, quota, the sidebar, wakes, and the agent verbs an agent such as Ouroboros calls.
+- Belongs in Housesitter, not here: quitting and relaunching the app, the Mac's processes, the keeper, Housesitter's own launch agents and deploying a release (`housesitter deploy shepherd`).
 - Tests run against fakes: `test/fake-app.mjs` is a pretend socket, and sessions are in-memory. Nothing touches a real app, a real Mac or a real account.
 - No machine names, account names or internal project names in code, tests, commits or PR text.
 - Run `npm test`. CI also syntax-checks every `.mjs` file.
