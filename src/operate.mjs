@@ -358,3 +358,24 @@ export async function runWorkflow(d, id) {
   const started = await ask(d, { type: 'run_workflow_now', id: workflow }, (reply) => (reply.type === 'workflow_run_started' ? 'ok' : reply.type === 'workflow_run_rejected' ? 'fail' : 'ignore'), REQUEST_WAIT_MS);
   return compact({ ok: started.ok, run: started.frame?.run, error: started.error });
 }
+
+const AUTOMATION_WRITE = (args) => args.clear === true || AUTOMATION_KEYS.some((k) => args[k] !== undefined);
+
+// Runs one agent verb's operation by its name, with the tool arguments the operations take.
+export function runOperation(verb, args, d) {
+  switch (verb) {
+    case 'sessions': return sessions(d, { state: args.state });
+    case 'session': return session(d, args.session_id);
+    case 'messages': return messages(d, args.session_id, args.count ?? 6);
+    case 'send': return send(d, args);
+    case 'create': return create(d, args);
+    case 'answer': return answer(d, args);
+    case 'plan': return plan(d, args);
+    case 'archive': return archiveSession(d, args);
+    case 'automation': return AUTOMATION_WRITE(args) ? automation(d, args) : automationOf(d, args.session_id);
+    case 'workflows': return workflows(d);
+    case 'run-workflow': return runWorkflow(d, args.id);
+    case 'open': return show(d, args.id);
+    default: throw new ShepherdError({ code: 'unknown-verb', problem: `no operation for ${verb}`, fix: 'shepherd help' });
+  }
+}

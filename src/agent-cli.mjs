@@ -1,14 +1,13 @@
-// The agent-facing verbs of `shepherd`: each reads its arguments as flags or as one JSON object on stdin (`--input -`), runs one
-// operation from operate.mjs, and prints its result. With --json the result is one line of JSON (on failure too, with ok false);
-// without it, a short text. Keys in the JSON input are the tool arguments the operations take (session_id, delivery_mode,
-// kickoff: { prompt, mode, … }); flags are their kebab-case names. Flags win over input. A message to a session goes as a
-// peer message from Ouroboros; --as-user (as_user) sends the owner's own relayed words as a labelled user prompt instead.
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import { ShepherdError } from './error.mjs';
+// The agent verbs of `shepherd`, as Ouro AX commands: each takes flags, or one JSON object on stdin (`--input -`), runs one
+// operation from operate.mjs and returns its result. With --json the result is one line of JSON (on a refusal too, with ok
+// false); without it, a short text. Keys in the JSON input are the tool arguments the operations take (session_id,
+// delivery_mode, kickoff: { prompt, mode, … }); flags are their kebab-case names, and a flag wins over the input. A message to
+// a session goes as a peer message from Ouroboros; --as-user sends the owner's own relayed words as a labelled user prompt.
+import { defineCommand } from '../lib/ouro-ui/registry/ouro/ax/command.ts';
+import { AxError, errorLine } from '../lib/ouro-ui/registry/ouro/ax/problem.ts';
+import { outcome } from '../lib/ouro-ui/registry/ouro/ax/outcome.ts';
 import { deps } from './sessions.mjs';
-import { AUTOMATION_KEYS, SESSION_STATES, answer, archiveSession, automation, automationOf, create, messages, plan, runWorkflow, send, session, sessions, show, workflows } from './operate.mjs';
+import { SESSION_STATES, runOperation } from './operate.mjs';
 
 const ENUM = (values) => ({ kind: 'enum', values });
 const TYPES = {
@@ -22,29 +21,38 @@ const TYPES = {
   'kickoff.reasoning_effort': { kind: 'string' }, 'kickoff.permission_mode': ENUM(['allow-all', 'manual']),
 };
 const KICKOFF_KEYS = ['prompt', 'mode', 'model', 'agent', 'reasoning_effort', 'permission_mode'];
+const AS_USER = ['as-user', 'as_user', "Send the owner's own relayed words, labelled, as a user prompt instead of a peer message."];
+const NAME = ['name', 'name', 'The title.'];
 
-// Each verb: its usage line, the positional argument (if any), its value flags [flag, key], and its switches [flag, key].
+// Each verb: what it does, whether it only reads, the positional argument's tool key (if any), its value flags
+// [flag, key, description] and its switches [flag, key, description].
 export const AGENT_VERBS = {
-  sessions: { usage: 'shepherd sessions [--state busy|idle|waiting|stuck] [--json]', options: [['state', 'state']] },
-  session: { usage: 'shepherd session <id> [--json]', positional: 'session_id' },
-  messages: { usage: 'shepherd messages <id> [--count <n>] [--json]', positional: 'session_id', options: [['count', 'count']] },
-  send: { usage: 'shepherd send <id> --message <text> [--delivery immediate|enqueue] [--as-user] [--json]', positional: 'session_id', options: [['message', 'message'], ['delivery', 'delivery_mode']], switches: [['as-user', 'as_user']] },
+  sessions: { summary: 'Every session in the sidebar: a summary and each session\'s activity.', read: true, options: [['state', 'state', 'Keep only the sessions in this state.']] },
+  session: { summary: 'One session, with what it waits on (awaiting_input).', read: true, positional: 'session_id' },
+  messages: { summary: 'A session\'s last messages, oldest first.', read: true, positional: 'session_id', options: [['count', 'count', 'How many messages: 6 by default.']] },
+  send: {
+    summary: 'Send a message to a session, as a peer message from Ouroboros\' own chat.', positional: 'session_id',
+    options: [['message', 'message', 'The text to send.'], ['delivery', 'delivery_mode', 'immediate, or enqueue behind what the session is doing.']], switches: [AS_USER],
+  },
   create: {
-    usage: 'shepherd create [--project <id|name> | --session-kind chat] [--name <title>] [--workspace-type worktree|branch] [--branch <name>] [--prompt <text>] [--mode interactive|plan|autopilot] [--model <m>] [--agent <a>] [--reasoning-effort <e>] [--permission-mode allow-all|manual] [--as-user] [--json]',
-    options: [['project', 'project_id'], ['session-kind', 'session_kind'], ['name', 'name'], ['workspace-type', 'workspace_type'], ['branch', 'branch_name'], ['prompt', 'kickoff.prompt'], ['mode', 'kickoff.mode'], ['model', 'kickoff.model'], ['agent', 'kickoff.agent'], ['reasoning-effort', 'kickoff.reasoning_effort'], ['permission-mode', 'kickoff.permission_mode']],
-    switches: [['as-user', 'as_user']],
+    summary: 'Make a session on a project (or a chat), optionally with a kickoff prompt.',
+    options: [['project', 'project_id', 'The project, by id or name.'], ['session-kind', 'session_kind', 'chat, for a session with no project.'], NAME, ['workspace-type', 'workspace_type', 'worktree or branch.'], ['branch', 'branch_name', 'The branch to work on.'], ['prompt', 'kickoff.prompt', 'The first prompt.'], ['mode', 'kickoff.mode', 'How the session runs its first prompt.'], ['model', 'kickoff.model', 'The model.'], ['agent', 'kickoff.agent', 'The agent.'], ['reasoning-effort', 'kickoff.reasoning_effort', 'The reasoning effort.'], ['permission-mode', 'kickoff.permission_mode', 'allow-all or manual.']],
+    switches: [AS_USER],
   },
-  answer: { usage: 'shepherd answer <id> --answer <text> [--json]', positional: 'session_id', options: [['answer', 'answer']] },
-  plan: { usage: 'shepherd plan <id> --approved true|false [--action <option>] [--feedback <text>] [--as-user] [--json]', positional: 'session_id', options: [['approved', 'approved'], ['action', 'selected_action'], ['feedback', 'feedback']], switches: [['as-user', 'as_user']], required: ['approved'] },
-  archive: { usage: 'shepherd archive <id> [--owner-asked] [--json]', positional: 'session_id', switches: [['owner-asked', 'owner_asked']] },
+  answer: { summary: 'Answer a question this watch heard the session ask.', positional: 'session_id', options: [['answer', 'answer', 'The answer.']] },
+  plan: {
+    summary: 'Approve or reject a plan this watch heard a session offer.', positional: 'session_id', required: ['approved'],
+    options: [['approved', 'approved', 'true to approve, false to reject.'], ['action', 'selected_action', 'The option to take, when the plan offers several.'], ['feedback', 'feedback', 'What to tell the session.']], switches: [AS_USER],
+  },
+  archive: { summary: 'Archive a session this agent created, or one the owner asked to archive.', positional: 'session_id', switches: [['owner-asked', 'owner_asked', 'The owner asked for this archive, so a session this agent did not create may go.']] },
   automation: {
-    usage: 'shepherd automation <id> [--clear | --interval once|minutes|daily|weekly|cron --prompt <text> …] [--json]', positional: 'session_id',
-    options: [['prompt', 'prompt'], ['interval', 'interval'], ['run-at', 'run_at'], ['every-minutes', 'every_minutes'], ['schedule-hour', 'schedule_hour'], ['schedule-minute', 'schedule_minute'], ['schedule-day', 'schedule_day'], ['cron-expression', 'cron_expression'], ['name', 'name']],
-    switches: [['clear', 'clear']],
+    summary: 'A session\'s automations (no fields), replace one, or clear it.', positional: 'session_id',
+    options: [['prompt', 'prompt', 'What the automation sends.'], ['interval', 'interval', 'once, minutes, daily, weekly or cron.'], ['run-at', 'run_at', 'When a once automation runs.'], ['every-minutes', 'every_minutes', 'The gap for a minutes automation.'], ['schedule-hour', 'schedule_hour', 'The hour for a daily or weekly automation.'], ['schedule-minute', 'schedule_minute', 'The minute.'], ['schedule-day', 'schedule_day', 'The day for a weekly automation.'], ['cron-expression', 'cron_expression', 'The expression for a cron automation.'], NAME],
+    switches: [['clear', 'clear', 'Remove the session\'s automation.']],
   },
-  workflows: { usage: 'shepherd workflows [--json]' },
-  'run-workflow': { usage: 'shepherd run-workflow <id> [--json]', positional: 'id' },
-  open: { usage: 'shepherd open <id> [--json]', positional: 'id' },
+  workflows: { summary: 'The app\'s workflows.', read: true },
+  'run-workflow': { summary: 'Run one workflow now.', positional: 'id' },
+  open: { summary: 'Show a session in the app\'s window.', read: true, positional: 'id' },
 };
 
 const isRecord = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -54,7 +62,7 @@ const setPath = (obj, key, value) => {
   return { ...obj, [head]: { ...(isRecord(obj[head]) ? obj[head] : {}), [tail]: value } };
 };
 
-// The value of a key from a flag (a string) or from the JSON input (any JSON type): { ok, value } or { ok: false, takes }.
+// The value of a key from a flag or from the JSON input (any JSON type): { ok, value } or { ok: false, takes }.
 function coerce(key, value) {
   const t = TYPES[key];
   if (t.kind === 'bool') {
@@ -76,106 +84,100 @@ function coerce(key, value) {
   return { ok: false, takes: 'text' };
 }
 
-// Parses `shepherd <verb> …` into { verb, args, json, copilotHome }, or { error: [problem, fix] }. `readStdin` is read only for `--input -`.
-export function parseAgentVerb(verb, rest, readStdin = () => fs.readFileSync(0, 'utf8')) {
+const flagSpec = (key, description) => {
+  const t = TYPES[key];
+  if (t.kind === 'enum') return { type: 'enum', values: t.values, description };
+  if (t.kind === 'bool') return { type: 'enum', values: ['true', 'false'], description };
+  if (t.kind === 'int') return { type: 'number', min: 1, description };
+  if (t.kind === 'number') return { type: 'number', description };
+  return { type: 'string', description };
+};
+
+// The tool arguments of a verb's call: the JSON input (read from stdin by the kit) first, then the positional, then the flags.
+export function toolArgs(verb, input) {
   const spec = AGENT_VERBS[verb];
-  const fix = spec.usage;
-  const out = { verb, args: {}, json: false, copilotHome: path.join(os.homedir(), '.copilot') };
-  const flags = {};
-  let positional;
-  let input;
-  const valueFlags = new Map(spec.options ?? []);
-  const switchFlags = new Map(spec.switches ?? []);
-  for (let i = 0; i < rest.length; i++) {
-    const a = rest[i];
-    if (a === '--json') out.json = true;
-    else if (a === '--input') {
-      if (rest[i + 1] !== '-') return { error: ['--input takes - (a JSON object on stdin)', fix] };
-      i++;
-      try { input = readStdin(); } catch { return { error: ['--input - could not read stdin', fix] }; }
-    } else if (a === '--copilot-home') {
-      if (!rest[i + 1]) return { error: ['--copilot-home takes a folder', fix] };
-      out.copilotHome = rest[++i];
-    } else if (a.startsWith('--') && switchFlags.has(a.slice(2))) flags[switchFlags.get(a.slice(2))] = true;
-    else if (a.startsWith('--') && valueFlags.has(a.slice(2))) {
-      if (rest[i + 1] === undefined) return { error: [`${a} needs a value`, fix] };
-      const key = valueFlags.get(a.slice(2));
-      const c = coerce(key, rest[++i]);
-      if (!c.ok) return { error: [`--${a.slice(2)} takes ${c.takes}`, fix] };
-      flags[key] = c.value;
-    } else if (!a.startsWith('--') && spec.positional && positional === undefined) positional = a;
-    else return { error: [`unknown argument "${a}" for ${verb}`, fix] };
-  }
-  if (input !== undefined) {
+  const bad = (problem) => new AxError({ code: 'bad-input', exit: 2, thing: verb, problem, fix: `shepherd ${verb} --help` });
+  let args = {};
+  if (input.input !== undefined) {
     let parsed;
-    try { parsed = JSON.parse(input); } catch { return { error: ['--input - needs one JSON object on stdin', fix] }; }
-    if (!isRecord(parsed)) return { error: ['--input - needs one JSON object on stdin', fix] };
+    try { parsed = JSON.parse(input.input); } catch { throw bad('--input needs one JSON object on stdin'); }
+    if (!isRecord(parsed)) throw bad('--input needs one JSON object on stdin');
     const allowed = new Set(['kickoff', spec.positional, ...(spec.options ?? []).map(([, k]) => k), ...(spec.switches ?? []).map(([, k]) => k)].filter(Boolean));
     for (const [key, value] of Object.entries(parsed)) {
-      if (!allowed.has(key)) return { error: [`unknown input key "${key}" for ${verb}`, fix] };
-      if (key === 'kickoff') {
-        if (!isRecord(value) || Object.keys(value).some((k) => !KICKOFF_KEYS.includes(k))) return { error: ['kickoff takes an object with prompt, mode, model, agent, reasoning_effort or permission_mode', fix] };
-        for (const [k, v] of Object.entries(value)) {
-          const c = coerce(`kickoff.${k}`, v);
-          if (!c.ok) return { error: [`kickoff.${k} takes ${c.takes}`, fix] };
-          out.args = setPath(out.args, `kickoff.${k}`, c.value);
-        }
+      if (!allowed.has(key)) throw bad(`unknown input key "${key}" for ${verb}`);
+      if (key !== 'kickoff') {
+        const c = coerce(key, value);
+        if (!c.ok) throw bad(`${key} takes ${c.takes}`);
+        args[key] = c.value;
         continue;
       }
-      const c = coerce(key, value);
-      if (!c.ok) return { error: [`${key} takes ${c.takes}`, fix] };
-      out.args[key] = c.value;
+      if (!isRecord(value) || Object.keys(value).some((k) => !KICKOFF_KEYS.includes(k))) throw bad('kickoff takes an object with prompt, mode, model, agent, reasoning_effort or permission_mode');
+      for (const [k, v] of Object.entries(value)) {
+        const c = coerce(`kickoff.${k}`, v);
+        if (!c.ok) throw bad(`kickoff.${k} takes ${c.takes}`);
+        args = setPath(args, `kickoff.${k}`, c.value);
+      }
     }
   }
-  if (positional !== undefined) out.args[spec.positional] = positional;
-  for (const [key, value] of Object.entries(flags)) out.args = setPath(out.args, key, value);
-  if (spec.positional && out.args[spec.positional] === undefined) return { error: [`${verb} needs ${spec.positional === 'id' ? 'an id' : 'a session id'}`, fix] };
-  for (const key of spec.required ?? []) if (out.args[key] === undefined) return { error: [`${verb} needs --${key}`, fix] };
-  return out;
-}
-
-const AUTOMATION_WRITE = (args) => args.clear === true || AUTOMATION_KEYS.some((k) => args[k] !== undefined);
-
-// Runs one verb's operation. Returns the result object; the caller prints it.
-export function runOperation(verb, args, d) {
-  switch (verb) {
-    case 'sessions': return sessions(d, { state: args.state });
-    case 'session': return session(d, args.session_id);
-    case 'messages': return messages(d, args.session_id, args.count ?? 6);
-    case 'send': return send(d, args);
-    case 'create': return create(d, args);
-    case 'answer': return answer(d, args);
-    case 'plan': return plan(d, args);
-    case 'archive': return archiveSession(d, args);
-    case 'automation': return AUTOMATION_WRITE(args) ? automation(d, args) : automationOf(d, args.session_id);
-    case 'workflows': return workflows(d);
-    case 'run-workflow': return runWorkflow(d, args.id);
-    case 'open': return show(d, args.id);
-    default: throw new ShepherdError({ code: 'unknown-verb', problem: `no operation for ${verb}`, fix: 'shepherd help' });
+  if (input.id !== undefined) args[spec.positional] = input.id;
+  for (const [flag, key] of [...(spec.options ?? []), ...(spec.switches ?? [])]) {
+    if (input[flag] === undefined) continue;
+    const c = coerce(key, input[flag]);
+    if (!c.ok) throw bad(`--${flag} takes ${c.takes}`);
+    args = setPath(args, key, c.value);
   }
+  return args;
 }
 
 // The text form: one line per session or message, otherwise the result as indented JSON.
 export function renderText(verb, result) {
-  if (verb === 'sessions') return result.sessions.map((s) => `${s.id.slice(0, 8)}  ${s.name}  ${s.activity.status} (${s.activity.why})`).join('\n') || 'no sessions';
-  if (verb === 'session') return `${result.id.slice(0, 8)}  ${result.name}  ${result.activity.status} (${result.activity.why})`;
-  if (verb === 'messages') return result.messages.map((m) => `${m.role}: ${m.text}`).join('\n') || 'no messages';
+  if (verb === 'sessions' && result.sessions) return result.sessions.map((s) => `${s.id.slice(0, 8)}  ${s.name}  ${s.activity.status} (${s.activity.why})`).join('\n') || 'no sessions';
+  if (verb === 'session' && result.id) return `${result.id.slice(0, 8)}  ${result.name}  ${result.activity.status} (${result.activity.why})`;
+  if (verb === 'messages' && result.messages) return result.messages.map((m) => `${m.role}: ${m.text}`).join('\n') || 'no messages';
   return JSON.stringify(result, null, 2);
 }
 
-// Runs a parsed verb: prints its result (JSON with --json, text otherwise) and returns the exit code (0 ok, 1 not ok). A
-// ShepherdError is printed as JSON too when --json is set, and then rethrown for the CLI's own error line.
-export async function runAgent({ verb, args, json, copilotHome }, { out = (s) => process.stdout.write(s) } = {}) {
-  const d = deps({ copilotHome });
-  let result;
-  try {
-    result = await runOperation(verb, args, d);
-  } catch (e) {
-    if (json && e instanceof ShepherdError) out(`${JSON.stringify({ ok: false, code: e.code, error: e.message })}\n`);
-    throw e;
-  }
-  const failed = result.ok === false || result.created === false;
-  out(json ? `${JSON.stringify(result)}\n` : `${renderText(verb, result)}\n`);
-  return failed ? 1 : 0;
-}
+const failed = (r) => r.ok === false || r.created === false;
 
+// The kit commands of the agent verbs. `guard` turns a library error into the kit's; `copilotHome` reads the --copilot-home flag.
+export function agentCommands({ guard, copilotHome }) {
+  return Object.entries(AGENT_VERBS).map(([verb, spec]) => {
+    const required = spec.required ?? [];
+    const flags = {
+      ...Object.fromEntries((spec.options ?? []).map(([flag, key, description]) => [flag, { ...flagSpec(key, description), ...(required.includes(key) ? { required: true, unless: 'input' } : {}) }])),
+      ...Object.fromEntries((spec.switches ?? []).map(([flag, , description]) => [flag, { type: 'boolean', description }])),
+      input: { type: 'string', stdin: true, placeholder: '-', description: 'Read one JSON object from stdin instead of flags: the tool arguments, such as session_id, as its keys. A flag wins over it.' },
+    };
+    return defineCommand({
+      name: verb,
+      summary: spec.summary,
+      effect: spec.read ? 'private' : 'others',
+      ...(spec.read ? {} : { why: 'optional' }),
+      args: spec.positional ? [{ name: 'id', required: true, unless: 'input', description: spec.positional === 'session_id' ? 'The session: its whole id, or the first 8 or more characters of it.' : 'The id, as shepherd lists it.' }] : [],
+      flags,
+      output: '{ ok, … } as the operation answers; { ok: false, code, error } when it could not',
+      exit: (r) => (failed(r) ? 'error' : 'ok'),
+      text: (r) => renderText(verb, r),
+      plan: (input) => outcome({
+        action: verb,
+        state: 'planned',
+        effect: 'others',
+        audience: { only: false, who: 'the session it names and whoever reads it in the app' },
+        summary: `Would run shepherd ${verb}${input.id ? ` on ${input.id}` : ''}: ${spec.summary} Nothing was sent.`,
+      }),
+      async run(input, ctx) {
+        const args = toolArgs(verb, input);
+        try {
+          return await guard(verb, () => runOperation(verb, args, deps({ copilotHome: copilotHome(input) })));
+        } catch (e) {
+          // A caller reads `{ ok: false, code, error }` from the last line of stdout; the error line still goes to stderr.
+          if (ctx?.json && e instanceof AxError && e.exit === 1) {
+            process.stderr.write(`${errorLine('shepherd', e.shape)}\n`);
+            return { ok: false, code: e.shape.code, error: e.message.slice(e.shape.thing.length + 2) };
+          }
+          throw e;
+        }
+      },
+    });
+  });
+}

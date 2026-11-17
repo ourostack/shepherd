@@ -11,7 +11,7 @@
     }
   },
   "types": "./src/index.d.ts",
-  "files": ["bin", "src", "README.md", "LICENSE", "llms.txt"],
+  "files": ["bin", "src", "lib", "README.md", "LICENSE", "llms.txt"],
   "engines": { "node": ">=22.18" },
   "scripts": {
     "test": "node --test test/*.test.mjs"

@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseAgentVerb } from '../src/agent-cli.mjs';
+import { toolArgs } from '../src/agent-cli.mjs';
 import { startFakeApp } from './fake-app.mjs';
 import { CHAT_SESSION, WORKSPACE_SESSION, copilotReplies } from './fake-copilot.mjs';
 import { writeHistory } from './fake-sidebar.mjs';
@@ -17,7 +17,6 @@ const IDLE = 'a3000000-0000-4000-8000-000000000003';
 const WORKING = 'a1000000-0000-4000-8000-000000000001';
 const WAITING = 'a2000000-0000-4000-8000-000000000002';
 const PLANNING = 'a5000000-0000-4000-8000-000000000005';
-const NOSTDIN = () => { throw new Error('no stdin in this test'); };
 
 const at = (msAgo) => Date.now() - msAgo;
 const lane = (id, sessionId, over = {}) => ({
@@ -62,31 +61,26 @@ async function withApp(fn, { refuse = [] } = {}) {
 
 const json = (r) => JSON.parse(r.stdout);
 
-test('parseAgentVerb reads flags into the tool argument names, and kickoff flags into kickoff', () => {
-  const p = parseAgentVerb('send', [IDLE, '--message', 'hi', '--delivery', 'enqueue', '--json'], NOSTDIN);
-  assert.deepEqual(p.args, { session_id: IDLE, message: 'hi', delivery_mode: 'enqueue' });
-  assert.equal(p.json, true);
-  const c = parseAgentVerb('create', ['--project', 'Shepherd', '--prompt', 'go', '--mode', 'plan', '--branch', 'feature-x'], NOSTDIN);
-  assert.deepEqual(c.args, { project_id: 'Shepherd', branch_name: 'feature-x', kickoff: { prompt: 'go', mode: 'plan' } });
-  assert.equal(parseAgentVerb('plan', [IDLE, '--approved', 'false'], NOSTDIN).args.approved, false);
+test('toolArgs reads flags into the tool argument names, and kickoff flags into kickoff', () => {
+  const p = toolArgs('send', { id: IDLE, message: 'hi', delivery: 'enqueue' });
+  assert.deepEqual(p, { session_id: IDLE, message: 'hi', delivery_mode: 'enqueue' });
+  const c = toolArgs('create', { project: 'Shepherd', prompt: 'go', mode: 'plan', branch: 'feature-x' });
+  assert.deepEqual(c, { project_id: 'Shepherd', branch_name: 'feature-x', kickoff: { prompt: 'go', mode: 'plan' } });
+  assert.equal(toolArgs('plan', { id: IDLE, approved: 'false' }).approved, false);
 });
 
-test('parseAgentVerb reads one JSON object from stdin with --input -, and a flag wins over the input', () => {
-  const stdin = JSON.stringify({ session_id: IDLE, message: 'from input', delivery_mode: 'immediate' });
-  const p = parseAgentVerb('send', ['--input', '-', '--delivery', 'enqueue'], () => stdin);
-  assert.deepEqual(p.args, { session_id: IDLE, message: 'from input', delivery_mode: 'enqueue' });
-  const c = parseAgentVerb('create', ['--input', '-'], () => JSON.stringify({ project_id: 'Shepherd', kickoff: { prompt: 'go', permission_mode: 'manual' } }));
-  assert.deepEqual(c.args, { project_id: 'Shepherd', kickoff: { prompt: 'go', permission_mode: 'manual' } });
+test('toolArgs reads one JSON object from --input, and a flag wins over the input', () => {
+  const input = JSON.stringify({ session_id: IDLE, message: 'from input', delivery_mode: 'immediate' });
+  assert.deepEqual(toolArgs('send', { input, delivery: 'enqueue' }), { session_id: IDLE, message: 'from input', delivery_mode: 'enqueue' });
+  const c = toolArgs('create', { input: JSON.stringify({ project_id: 'Shepherd', kickoff: { prompt: 'go', permission_mode: 'manual' } }) });
+  assert.deepEqual(c, { project_id: 'Shepherd', kickoff: { prompt: 'go', permission_mode: 'manual' } });
 });
 
-test('parseAgentVerb refuses what it cannot read, with the usage line as the fix', () => {
-  const usage = 'shepherd send <id> --message <text> [--delivery immediate|enqueue] [--as-user] [--json]';
-  assert.deepEqual(parseAgentVerb('send', [IDLE, '--delivery', 'sometimes'], NOSTDIN), { error: ['--delivery takes immediate|enqueue', usage] });
-  assert.deepEqual(parseAgentVerb('send', [IDLE, '--input', '-'], () => JSON.stringify({ bogus: 1 })), { error: ['unknown input key "bogus" for send', usage] });
-  assert.deepEqual(parseAgentVerb('send', [IDLE, '--input', '-'], () => '[1]'), { error: ['--input - needs one JSON object on stdin', usage] });
-  assert.deepEqual(parseAgentVerb('send', [IDLE, '--message'], NOSTDIN), { error: ['--message needs a value', usage] });
-  assert.deepEqual(parseAgentVerb('plan', [IDLE], NOSTDIN).error, ['plan needs --approved', 'shepherd plan <id> --approved true|false [--action <option>] [--feedback <text>] [--as-user] [--json]']);
-  assert.deepEqual(parseAgentVerb('session', [], NOSTDIN).error, ['session needs a session id', 'shepherd session <id> [--json]']);
+test('toolArgs refuses what it cannot read, with the verb\'s help as the fix', () => {
+  const bad = (verb, input, problem) => assert.throws(() => toolArgs(verb, input), (e) => e.exit === 2 && e.shape.problem === problem && e.shape.fix === `shepherd ${verb} --help`);
+  bad('send', { id: IDLE, delivery: 'sometimes' }, '--delivery takes immediate|enqueue');
+  bad('send', { input: JSON.stringify({ bogus: 1 }) }, 'unknown input key "bogus" for send');
+  bad('send', { input: '[1]' }, '--input needs one JSON object on stdin');
 });
 
 test('shepherd sessions --json lists the sidebar with its summary, and --state keeps one state', async () => {
@@ -224,7 +218,7 @@ test('a bad agent verb is a usage error with the fix, and an app that is not run
   try {
     const bad = await cli(['send', IDLE, '--delivery', 'sometimes'], { home });
     assert.equal(bad.status, 2);
-    assert.match(bad.stderr, /^shepherd: usage: --delivery takes immediate\|enqueue\. Fix: shepherd send <id> --message <text>/);
+    assert.match(bad.stderr, /^shepherd: send: --delivery is one of immediate, enqueue, not "sometimes"\. Fix: shepherd send /);
     const down = await cli(['sessions', '--json', '--copilot-home', path.join(home, 'nothing')], { home });
     assert.equal(down.status, 1);
     assert.match(down.stderr, /^shepherd: sidebar-unlisted: .*no ws\.port/m);
