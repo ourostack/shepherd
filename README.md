@@ -45,23 +45,46 @@ flowchart LR
 ## CLI
 
 ```sh
-npx github:ourostack/shepherd#v0.7.0 status                # one line per local session
-npx github:ourostack/shepherd#v0.7.0 status --json         # the same as data
-npx github:ourostack/shepherd#v0.7.0 restore-history <id>  # put back an archived session's compressed history
-npx github:ourostack/shepherd#v0.7.0 retire plan          # what retirement and the size watch would archive, flag or ask
-npx github:ourostack/shepherd#v0.7.0 watch --status        # what the health watch is following
-npx github:ourostack/shepherd#v0.7.0 quota                 # each Copilot account's quota, and the balancer's last tick
-npx github:ourostack/shepherd#v0.7.0 sidebar               # which projects the sidebar shows, and what apply would change
-npx github:ourostack/shepherd#v0.7.0 wakes                 # each wake runner's last run and the wakes it delivered
-npx github:ourostack/shepherd#v0.7.0 stuck                 # which stopped sessions a stuck resume would resume
-npx github:ourostack/shepherd#v0.7.0 help
+npx github:ourostack/shepherd#v0.8.0 status                # one line per local session
+npx github:ourostack/shepherd#v0.8.0 status --json         # the same as data
+npx github:ourostack/shepherd#v0.8.0 restore-history <id>  # put back an archived session's compressed history
+npx github:ourostack/shepherd#v0.8.0 retire plan          # what retirement and the size watch would archive, flag or ask
+npx github:ourostack/shepherd#v0.8.0 watch --status        # what the health watch is following
+npx github:ourostack/shepherd#v0.8.0 quota                 # each Copilot account's quota, and the balancer's last tick
+npx github:ourostack/shepherd#v0.8.0 sidebar               # which projects the sidebar shows, and what apply would change
+npx github:ourostack/shepherd#v0.8.0 wakes                 # each wake runner's last run and the wakes it delivered
+npx github:ourostack/shepherd#v0.8.0 stuck                 # which stopped sessions a stuck resume would resume
+npx github:ourostack/shepherd#v0.8.0 help
 ```
+
+## For agents: the CLI contract
+
+Each verb below takes its arguments as flags, or as one JSON object on stdin with `--input -` (keys are the flag names with underscores, for example `session_id`, `delivery_mode`, and `kickoff: { prompt, mode, … }`; a flag wins over the input). `--json` prints one line of JSON: the result, or `{ "ok": false, "code", "error" }` on failure. Exit codes: 0 ok, 1 refused or failed, 2 usage. A session id is the whole id or its first 8 or more characters.
+
+| Verb | Flags | JSON result |
+| --- | --- | --- |
+| `sessions` | `[--state busy\|idle\|waiting\|stuck]` | `{ summary, sessions }`: each session's id, name, activity (`status`, `why`), coordinator, and `awaiting_input` |
+| `session <id>` | | one session, as in `sessions` |
+| `messages <id>` | `[--count n]` (default 6) | `{ session_id, name, state, messages: [{ at, role, text }], coverage, … }`, oldest first |
+| `send <id>` | `--message <text> [--delivery immediate\|enqueue]` | `{ ok, status: accepted\|queued\|failed, session_id, name, message_id?, error? }` |
+| `create` | `[--project <id\|name> \| --session-kind chat] [--name] [--workspace-type worktree\|branch] [--branch] [--prompt] [--mode] [--model] [--agent] [--reasoning-effort] [--permission-mode]` | `{ ok, created, session_id, app_url, kind, workspace_id?, error? }` |
+| `answer <id>` | `--answer <text>` | `{ ok, session_id, error? }`; only a question the watch heard |
+| `plan <id>` | `--approved true\|false [--action] [--feedback]` | `{ ok, approved, session_id, feedback_sent?, error? }`; only a plan the watch heard |
+| `archive <id>` | `[--owner-asked]` | `{ ok, session_id, error? }`; only a session this agent created, or with `--owner-asked`, one the owner asked for, or a handed-off oversize one |
+| `automation <id>` | none: read; `--clear`: remove; `--interval once\|minutes\|daily\|weekly\|cron` with `--prompt`, `--run-at`, `--every-minutes`, `--schedule-hour`, `--schedule-minute`, `--schedule-day`, `--cron-expression`, `--name`: replace | `{ ok, session_id, automations? \| automation? \| cleared?, error? }` |
+| `workflows` | | `{ ok, workflows, error? }` |
+| `run-workflow <id>` | | `{ ok, run?, error? }` |
+| `open <id>` | | `{ ok, session_id, app_url, error? }` |
+
+`create` records the sessions it makes, which is what lets `archive` take them without `--owner-asked`. The questions and plans that `answer` and `plan` act on are heard by the resident `watch --every`, which keeps one observer connection open; without it, `answer` and `plan` refuse. Replies to a session come back through `messages` and `session`, not pushed to the caller. The CLI archive keeps the history uncompressed.
 
 Read-only except `restore-history`, `watch`, `install`, an applied quota tick, `sidebar apply`, `retire apply` and `wakes poll` (their own state, log and waiting files, the app's sidebar, the archive log, and, for `wakes poll`, the wakes it sends only when `wakes.json` enables them). `quota read`, `quota plan`, `quota status`, `sidebar` (plan), `retire plan`, `wakes` (status) and `stuck` (plan) change nothing. Exit codes: 0 ok, 1 the app's data could not be read, the history could not be restored, the agent could not load, or the app refused a sidebar change, 2 usage.
 
 ## Run it always
 
 `shepherd install` writes `~/Library/LaunchAgents/bot.ouro.shepherd.plist` and loads it. The agent runs `shepherd watch --every 60 --quiet` and is kept alive, so every 60 seconds one pass runs the health watch, then the quota balancer, then the sidebar tidy (at most every `everyMinutes`), with no one at a terminal. Its log is `~/Library/Logs/shepherd-watch.launchd.log`. `shepherd install --dry-run` prints the plist and changes nothing.
+
+The resident watch also keeps one observer connection open to hear the questions and plans sessions ask, which `answer` and `plan` need.
 
 The health watch follows each session that a resume sent a message to, for six hours. It asks a silent, erroring or stuck session once more, and tells the agent by name only about a session that stays broken.
 

@@ -19,6 +19,21 @@ const isRecord = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const str = (v) => (typeof v === 'string' && v.length > 0 ? v : null);
 const arr = (v) => (Array.isArray(v) ? v.filter(isRecord) : []);
 
+const PERMISSION_WHAT = { shell: 'run a shell command', write: 'change a file', read: 'read a file', url: 'open a web address', mcp: 'use a connected tool', 'custom-tool': 'use a custom tool', 'extension-management': 'change an extension' };
+
+// The request in a few plain words. A command's text stays out: it can carry secrets.
+export function describePermission(request) {
+  const record = isRecord(request) ? request : {};
+  const kind = str(record.kind);
+  if (kind === 'extension-permission-access') {
+    const capabilities = Array.isArray(record.capabilities) ? record.capabilities.filter((c) => typeof c === 'string').join(', ') : '';
+    return `let the extension ${str(record.extensionName) ?? '(unnamed)'} ${capabilities || 'ask for access'}`;
+  }
+  const what = (kind && PERMISSION_WHAT[kind]) || (kind ? `a ${kind} permission` : 'a permission');
+  const intention = str(record.intention);
+  return intention ? `${what} (${intention})` : what;
+}
+
 export function parseLines(lines) {
   const events = [];
   for (const line of lines) {
@@ -34,7 +49,7 @@ export function parseLines(lines) {
 // What the session's own history says about its agent loop. Sub-agent events are their parent's business.
 export function tailFacts(events) {
   const tools = new Map();
-  const permissions = new Set();
+  const permissions = new Map();
   let last = null, lastActivity = null, askedTools = false, finished = false;
   for (const event of events) {
     if (event.agentId !== undefined) continue;
@@ -43,7 +58,7 @@ export function tailFacts(events) {
     if (type === 'session.shutdown' || type === 'session.resume' || type === 'session.start') { tools.clear(); permissions.clear(); }
     if (type === 'tool.execution_start' && str(data.toolCallId)) tools.set(data.toolCallId, str(data.toolName) ?? '');
     if (type === 'tool.execution_complete' && str(data.toolCallId)) tools.delete(data.toolCallId);
-    if (type === 'permission.requested' && str(data.requestId) && data.resolvedByHook !== true) permissions.add(data.requestId);
+    if (type === 'permission.requested' && str(data.requestId) && data.resolvedByHook !== true) permissions.set(data.requestId, { requestId: data.requestId, what: describePermission(data.permissionRequest), at: str(event.timestamp) });
     if (type === 'permission.completed' && str(data.requestId)) permissions.delete(data.requestId);
     if (!LOOP.has(type)) continue;
     // Only a person's stop counts; a runtime shutdown cancels sub-agents with other reasons.
@@ -63,7 +78,8 @@ export function tailFacts(events) {
     loopCut = askedTools;
     detail = askedTools ? 'between turns (its last turn called tools and no next turn started)' : 'its turn ended';
   } else if (last) { loopCut = true; detail = `mid-turn (last ${last})`; }
-  return { awaiting, loopCut, detail, lastActivity };
+  const prompt = permissions.values().next().value;
+  return { awaiting, loopCut, detail, lastActivity, ...(prompt ? { prompt } : {}) };
 }
 
 export function classify(isRunning, facts, nowMs, writtenAtMs = null) {
@@ -121,7 +137,7 @@ export async function rows(d, now = d.now()) {
     if (!id || !SESSION_ID.test(id) || out.some((k) => k.id === id)) return;
     const { facts, writtenAtMs } = factsOf(d, id);
     const { state, detail } = classify(isRunning, facts, now, writtenAtMs);
-    out.push({ id, ...row, state, detail, lastActivity: facts.lastActivity ?? row.updatedAt, ...(facts.awaiting ? { awaiting: facts.awaiting } : {}) });
+    out.push({ id, ...row, state, detail, lastActivity: facts.lastActivity ?? row.updatedAt, ...(facts.awaiting ? { awaiting: facts.awaiting } : {}), ...(facts.prompt ? { prompt: facts.prompt } : {}) });
   };
   for (const workspace of workspaces) {
     if (workspace.archivedAt) continue;
@@ -130,8 +146,9 @@ export async function rows(d, now = d.now()) {
     const openPr = arr(workspace.repoContexts).map((c) => (isRecord(c.createdPullRequest) ? c.createdPullRequest : null)).find((pr) => pr && !/^(merged|closed)$/i.test(str(pr.state) ?? ''));
     add(str(session.sessionId) ?? str(workspace.activeSessionId), {
       name: str(workspace.name) ?? str(session.title) ?? '(unnamed)', kind: 'workspace', workspaceId: str(workspace.id), workspaceType: str(workspace.workspaceType),
-      projectRepo: str(binding?.repoFullName), branch: str(workspace.branch), parentSessionId: null,
-      coordinatingCreatorSessionId: str(workspace.coordinatingCreatorSessionId),
+      project: str(workspace.projectName), projectId: str(workspace.projectId), projectRepo: str(binding?.repoFullName), branch: str(workspace.branch), path: str(workspace.displayPath),
+      createdAt: str(workspace.createdAt), creatorSessionId: str(workspace.creatorSessionId), parentSessionId: null,
+      coordinatingCreatorSessionId: str(workspace.coordinatingCreatorSessionId), wasInterrupted: session.wasInterrupted === true,
       isRunning: session.isRunning === true, remote: (str(workspace.hostId) ?? 'local') !== 'local' || (str(session.executionLocation) ?? 'local') !== 'local',
       updatedAt: str(session.updatedAt) ?? str(workspace.updatedAt),
       ...(openPr ? { openPullRequest: str(openPr.htmlUrl) ?? `#${String(openPr.number)}` } : {}),
@@ -141,8 +158,9 @@ export async function rows(d, now = d.now()) {
   for (const chat of chats) {
     if (chat.archivedAt) continue;
     add(str(chat.id), {
-      name: str(chat.title) ?? '(unnamed chat)', kind: 'chat', workspaceId: null, workspaceType: null, projectRepo: null, branch: null,
-      coordinatingCreatorSessionId: str(chat.coordinatingCreatorSessionId), parentSessionId: str(chat.parentSessionId),
+      name: str(chat.title) ?? '(unnamed chat)', kind: 'chat', workspaceId: null, workspaceType: null, project: null, projectId: null, projectRepo: null, branch: null, path: null,
+      createdAt: str(chat.createdAt), creatorSessionId: null, coordinatingCreatorSessionId: str(chat.coordinatingCreatorSessionId), parentSessionId: str(chat.parentSessionId),
+      wasInterrupted: chat.wasInterrupted === true,
       isRunning: chat.isRunning === true, remote: (str(chat.executionLocation) ?? 'local') !== 'local', updatedAt: str(chat.updatedAt),
     }, chat.isRunning === true);
   }
