@@ -150,3 +150,103 @@ test('a pass that cannot list the app changes nothing and says why', async () =>
   assert.match(r.errors[0], /could not list the app's sessions: .*no ws\.port/);
   fs.rmSync(home, { recursive: true, force: true });
 });
+
+// ---------- the landed gate: nothing is archived while its work is not on main ----------
+
+import { checkLanded, land } from '../src/landed.mjs';
+
+// A scripted git and gh: each call is matched by its arguments, and every call is kept.
+function scripted(answers) {
+  const calls = [];
+  const answer = (tool) => async (cwd, args) => {
+    const line = `${tool} ${args.join(' ')}`;
+    calls.push(line);
+    const hit = Object.entries(answers).find(([k]) => line.startsWith(k));
+    const v = hit ? hit[1] : '';
+    return typeof v === 'object' ? { code: v.code, stdout: v.stdout ?? '', stderr: v.stderr ?? '' } : { code: 0, stdout: `${v}\n`, stderr: '' };
+  };
+  return { calls, landDeps: { git: answer('git'), gh: answer('gh'), exists: () => true } };
+}
+const REPO = { 'git rev-parse --is-inside-work-tree': 'true', 'git symbolic-ref --short -q HEAD': 'work', 'git rev-parse HEAD': 'abc', 'git status --porcelain': '', 'git symbolic-ref --short -q refs/remotes/origin/HEAD': 'origin/main', 'git rev-list --count origin/main..HEAD': '3', 'git rev-parse --verify -q origin/work': 'abc', 'git rev-list --count origin/work..HEAD': '0', 'gh pr list': '[]' };
+const wsRow = (over = {}) => row(P, { path: '/work/tree', ...over });
+
+test('landed check: clean and merged goes; each kind of unlanded work is named; anything unknown is held', async () => {
+  const merged = JSON.stringify([{ number: 7, state: 'MERGED', url: 'u', headRefOid: 'abc' }]);
+  const cases = [
+    ['merged branch', { 'gh pr list': merged }, 'clean'],
+    ['nothing beyond main', { 'git rev-list --count origin/main..HEAD': '0' }, 'clean'],
+    ['uncommitted changes', { 'git status --porcelain': ' M a.js' }, 'land'],
+    ['unpushed commits', { 'git rev-list --count origin/work..HEAD': '2' }, 'land'],
+    ['never pushed', { 'git rev-parse --verify -q origin/work': { code: 1 } }, 'land'],
+    ['pushed, no pull request', {}, 'land'],
+    ['pull request open and pushed', { 'gh pr list': JSON.stringify([{ number: 8, state: 'OPEN', url: 'pr8', headRefOid: 'abc' }]) }, 'hold'],
+    ['pull request closed unmerged', { 'gh pr list': JSON.stringify([{ number: 9, state: 'CLOSED', url: 'pr9', headRefOid: 'abc' }]) }, 'hold'],
+    ['merged but head moved on', { 'gh pr list': JSON.stringify([{ number: 7, state: 'MERGED', url: 'u', headRefOid: 'old' }]) }, 'land'],
+    ['detached head', { 'git symbolic-ref --short -q HEAD': '' }, 'hold'],
+    ['fetch fails', { 'git fetch': { code: 1 } }, 'hold'],
+    ['gh unavailable', { 'gh pr list': { code: 1 } }, 'hold'],
+    ['dirty on main', { 'git symbolic-ref --short -q HEAD': 'main', 'git status --porcelain': '?? x' }, 'hold'],
+    ['clean on main', { 'git symbolic-ref --short -q HEAD': 'main', 'git rev-list --count origin/main..HEAD': '0' }, 'clean'],
+  ];
+  for (const [name, over, want] of cases) {
+    const s = scripted({ ...REPO, ...over });
+    assert.equal((await checkLanded(wsRow(), { landDeps: s.landDeps })).outcome, want, name);
+  }
+  assert.equal((await checkLanded(row(P, { path: null }), { landDeps: scripted(REPO).landDeps })).outcome, 'hold');
+  assert.equal((await checkLanded(row(P, { path: '/x' }), { landDeps: { ...scripted(REPO).landDeps, exists: () => false } })).outcome, 'hold');
+  assert.equal((await checkLanded(row(P, { kind: 'chat', path: null }), {})).outcome, 'clean');
+});
+
+test('land: commits uncommitted work, pushes, opens a pull request with a clean message and turns auto-merge on; failures hold', async () => {
+  const found = { cwd: '/work/tree', branch: 'work', def: 'main', dirty: true, open: null };
+  const s = scripted({ 'git log': 'Fix the thing', 'gh pr create': 'https://github.com/o/r/pull/5' });
+  assert.deepEqual(await land(found, { landDeps: s.landDeps }), { ok: true, url: 'https://github.com/o/r/pull/5' });
+  assert.deepEqual(s.calls.map((c) => c.split(' ').slice(0, 2).join(' ')), ['git add', 'git commit', 'git push', 'git log', 'gh pr', 'gh pr']);
+  assert.ok(s.calls.at(-1).startsWith('gh pr merge https://github.com/o/r/pull/5') && s.calls.at(-1).endsWith('--auto --squash'));
+  assert.doesNotMatch(s.calls.join('\n'), /co-authored|copilot|claude|\bAI\b/i);
+  const noPush = scripted({ 'git push': { code: 1 } });
+  assert.equal((await land(found, { landDeps: noPush.landDeps })).ok, false);
+  assert.ok(!noPush.calls.some((c) => c.startsWith('gh pr create')));
+  const noAuto = scripted({ 'gh pr create': 'https://github.com/o/r/pull/6', 'gh pr merge': { code: 1, stderr: 'not allowed' } });
+  const r = await land({ ...found, dirty: false }, { landDeps: noAuto.landDeps });
+  assert.equal(r.ok, false);
+  assert.match(r.why, /auto-merge could not be turned on/);
+  const existing = scripted({});
+  assert.equal((await land({ ...found, dirty: false, open: 'pr1' }, { landDeps: existing.landDeps })).url, 'pr1');
+  assert.ok(!existing.calls.some((c) => c.startsWith('gh pr create')));
+});
+
+test('retire: a finished session with unlanded work is never archived; a plan says what would land, apply lands it and holds, clean goes', async () => {
+  const home = tmp('retire-landed-');
+  const listed = [row(ORPHAN, { ...day, coordinatingCreatorSessionId: GONE, path: '/w/o' })];
+  sessionHistory(home, ORPHAN, 'work', { turned: true });
+  for (const [found, landed, expect] of [
+    [{ outcome: 'land', why: '2 unpushed commit(s) on work' }, { ok: true, url: 'pr5' }, ['hold', 'landing']],
+    [{ outcome: 'land', why: 'uncommitted changes on work' }, { ok: false, why: 'could not push' }, ['hold', 'unlanded']],
+    [{ outcome: 'hold', why: 'detached HEAD' }, null, ['hold', 'unlanded']],
+  ]) {
+    const app = fakeApp();
+    const d = { ...testDeps(home, { app }), checkLanded: async () => found, land: async () => landed };
+    const e = await retireSessions(listed, d, { apply: true });
+    assert.deepEqual(e.map((x) => [x.what, x.reason]), [expect], found.why);
+    assert.deepEqual(app.archived, []);
+  }
+  const app = fakeApp();
+  const plan = await retireSessions(listed, { ...testDeps(home, { app }), checkLanded: async () => ({ outcome: 'land', why: 'x' }), land: async () => { throw new Error('plan must not land'); } }, { apply: false });
+  assert.deepEqual(plan.map((x) => x.what), ['land']);
+  const go = await retireSessions(listed, { ...testDeps(home, { app }), checkLanded: async () => ({ outcome: 'clean' }) }, { apply: true });
+  assert.deepEqual(go.map((x) => x.what), ['archive']);
+  assert.equal(app.archived.length, 1);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('retire: a handed-off session with unlanded work is held, once, not again as finished', async () => {
+  const home = tmp('retire-landed-ho-');
+  handedOff(home);
+  const app = fakeApp();
+  const d = { ...testDeps(home, { app }), checkLanded: async () => ({ outcome: 'hold', why: 'dirty' }) };
+  const e = await retireSessions([row(P, { ...quiet, ...day, coordinatingCreatorSessionId: GONE }), row(S, { ...working })], d, { apply: true });
+  assert.equal(e.filter((x) => x.id === P).length, 1);
+  assert.deepEqual(app.archived, []);
+  fs.rmSync(home, { recursive: true, force: true });
+});
