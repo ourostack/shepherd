@@ -20,6 +20,8 @@ Shepherd keeps the GitHub Copilot app's sessions as work. Plain ESM, no build st
 - `wakesConfig(file?)` reads `~/.config/shepherd/wakes.json` (`SHEPHERD_WAKES_CONFIG`): `{ "enabled": true, "runners": [{ "name", "command": [argv], "everySeconds", "delivery", "session"? }] }`; off unless enabled. `runDueWakes(deps, runners, due)` runs the due runners and delivers each wake (one at a time per session, `replaces` takes back queued messages, `done` reports each delivery). `planWakes(runners)` shows what they would send and sends nothing.
 - `stuckResumeConfig(file?)` reads `~/.config/shepherd/stuck-resume.json` (`SHEPHERD_STUCK_RESUME_CONFIG`): `{ "enabled": true }`; off unless enabled. `stuckPlan(rows, deps)` plans; `resumeStuck(rows, deps)` sends one resume to each stopped session, once per stop and at most three a day.
 - Errors are `ShepherdError` with `code`, `problem` and `fix`; the message reads `<problem>. Fix: <fix>.`
+- `operate.mjs` (exported): `sessions(d, { state })`, `session(d, id)`, `messages(d, id, count)`, `send(d, { session_id, message, delivery_mode })`, `create(d, args)`, `answer(d, args)`, `plan(d, args)`, `archiveSession(d, { session_id, owner_asked })`, `show(d, id)`, `automation(d, args)`, `automationOf(d, id)`, `workflows(d)`, `runWorkflow(d, id)`. Each returns a plain object, or throws `ShepherdError`.
+- `listenPrompts(d, { retryMs })` keeps the observer connection that records the questions and plans sessions ask; `applyFrame(pending, frame, at)` applies one announced frame.
 
 ## CLI
 
@@ -34,6 +36,18 @@ Shepherd keeps the GitHub Copilot app's sessions as work. Plain ESM, no build st
 - `shepherd wakes [status|poll] [--json]`: each wake runner's last run, wakes delivered, open wakes and status lines (status, the default). `poll` runs each command now and sends its wakes only when `wakes.json` says enabled; otherwise it prints what it would send.
 - `shepherd stuck [plan] [--json]`: the stopped sessions and what a stuck resume would do. plan (the default) changes nothing.
 - `shepherd install [--dry-run]`: loads `~/Library/LaunchAgents/bot.ouro.shepherd.plist`, which runs `shepherd watch --every 60 --quiet` and is kept alive. `--dry-run` prints the plist and changes nothing.
+- `shepherd sessions [--state busy|idle|waiting|stuck] [--json]`: `{ summary, sessions }` for the sidebar; each session has its activity, coordinator and `awaiting_input`.
+- `shepherd session <id> [--json]`: one session, as in `sessions`.
+- `shepherd messages <id> [--count n] [--json]`: the last n messages (default 6), oldest first, with `coverage`.
+- `shepherd send <id> --message <text> [--delivery immediate|enqueue] [--json]`: `{ ok, status, session_id, name, message_id?, error? }`.
+- `shepherd create [--project <id|name> | --session-kind chat] [--name] [--workspace-type worktree|branch] [--branch] [--prompt] [--mode] [--model] [--agent] [--reasoning-effort] [--permission-mode] [--json]`: `{ ok, created, session_id, app_url, kind, error? }`.
+- `shepherd answer <id> --answer <text> [--json]`: answers a question the resident watch heard the session ask.
+- `shepherd plan <id> --approved true|false [--action] [--feedback] [--json]`: approves or rejects a plan the resident watch heard.
+- `shepherd archive <id> [--owner-asked] [--json]`: archives a session this agent created, or one the owner asked for with `--owner-asked`, or a handed-off oversize one.
+- `shepherd automation <id> [--clear | --interval … --prompt …] [--json]`: reads, replaces or clears the session's automation.
+- `shepherd workflows [--json]` and `shepherd run-workflow <id> [--json]`: list the app's workflows, run one now.
+- `shepherd open <id> [--json]`: shows the session in the app's window.
+- Each agent verb also takes one JSON object on stdin with `--input -`; `--json` prints one JSON result (`{ ok: false, code, error }` on failure). Exit 0 ok, 1 refused or failed, 2 usage.
 - `shepherd version [--json]` (also `--version`) prints the installed version.
 - `shepherd help`.
 - Run it without installing: `npx github:ourostack/shepherd#v0.7.0 status --json` (not on npm yet).

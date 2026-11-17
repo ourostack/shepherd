@@ -30,7 +30,9 @@ function* frames(buf) {
 
 // refuse: ids the app answers with an error. silent: ids it takes the message for but never confirms. turns: a send also
 // writes the session's history (a user message, then a new turn 30 ms later), except for ids in drop, which never take a turn.
-export async function startFakeApp(home, { token = 'tok', refuse = [], silent = [], turns = false, drop = [] } = {}) {
+// reply(request) may answer any request with frames of its own (or null to fall through to the defaults below).
+// push(frame) sends a frame to every connected client, as the app announces a question or plan.
+export async function startFakeApp(home, { token = 'tok', refuse = [], silent = [], turns = false, drop = [], reply = null } = {}) {
   fs.mkdirSync(path.join(home, 'run'), { recursive: true });
   const received = [];
   const server = http.createServer();
@@ -45,9 +47,12 @@ export async function startFakeApp(home, { token = 'tok', refuse = [], silent = 
     socket.write(frame(JSON.stringify({ type: 'server_hello' })));
     const say = (o) => socket.write(frame(JSON.stringify(o)));
     socket.on('data', (buf) => {
+      if ((buf[0] & 15) === 8) { socket.destroy(); return; }
       for (const text of frames(buf)) {
         const m = JSON.parse(text);
         received.push(m);
+        const own = reply?.(m);
+        if (own) { for (const f of own) say(f); continue; }
         const id = m.session_id || m.workspace_id;
         if (refuse.includes(id)) { say({ type: 'error', request_id: m.request_id, message: `${id} is archived` }); continue; }
         if (silent.includes(id)) continue;
@@ -63,7 +68,8 @@ export async function startFakeApp(home, { token = 'tok', refuse = [], silent = 
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   fs.writeFileSync(path.join(home, 'run', 'ws.port'), String(server.address().port));
   fs.writeFileSync(path.join(home, 'run', 'ws.token'), token);
-  return { received, close: () => new Promise((r) => { for (const s of open) s.destroy(); server.close(r); }) };
+  const push = (o) => { for (const s of open) s.write(frame(JSON.stringify(o))); };
+  return { received, push, close: () => new Promise((r) => { for (const s of open) s.destroy(); server.close(r); }) };
 }
 
 function takeTurn(home, id, prompt, turnFollows) {

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { rows, tailFacts, classify } from '../src/rows.mjs';
+import { rows, tailFacts, classify, describePermission } from '../src/rows.mjs';
 import { fakeApp, sessionHistory, testDeps, NOW, writeHistory } from './fake-sidebar.mjs';
 
 const WORKING = 'a0000000-0000-4000-8000-000000000001';
@@ -32,8 +32,9 @@ test('the sidebar rows carry the coordinator, the open pull request and the auto
   const { lastActivity, ...lane } = listed.find((r) => r.id === IDLE);
   assert.equal(typeof lastActivity, 'string');
   assert.deepEqual(lane, {
-    id: IDLE, name: 'Lane w1', kind: 'workspace', workspaceId: 'w1', workspaceType: 'worktree', projectRepo: 'example/project', branch: 'lane-branch', parentSessionId: null,
-    coordinatingCreatorSessionId: WORKING, state: 'idle', detail: 'its turn ended', isRunning: false, remote: false, updatedAt: '2026-11-16T15:00:00Z',
+    id: IDLE, name: 'Lane w1', kind: 'workspace', workspaceId: 'w1', workspaceType: 'worktree', project: null, projectId: null, projectRepo: 'example/project', branch: 'lane-branch',
+    path: null, createdAt: null, creatorSessionId: null, parentSessionId: null, coordinatingCreatorSessionId: WORKING, wasInterrupted: false,
+    state: 'idle', detail: 'its turn ended', isRunning: false, remote: false, updatedAt: '2026-11-16T15:00:00Z',
     openPullRequest: 'https://github.com/example/project/pull/7', automation: true,
   });
   assert.equal(listed.find((r) => r.id === CHAT).parentSessionId, WORKING);
@@ -57,6 +58,24 @@ test('a session the app marks running is working, and one whose history waits on
   assert.equal(byId[WORKING].detail, 'the app says it is running');
   assert.equal(byId[WAITING].state, 'waiting');
   assert.equal(byId[WAITING].awaiting, 'input');
+});
+
+test('a session frozen on a permission prompt is waiting, and its row carries the oldest open request in plain words', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'rows-perm-'));
+  const app = fakeApp({ workspaces: [workspace('w1', WAITING, { projectName: 'Project', projectId: 'p1', displayPath: '/work/lane', session: { sessionId: WAITING, isRunning: false, updatedAt: '2026-11-16T15:59:00Z', executionLocation: 'local' } })] });
+  writeHistory(home, WAITING, [
+    { type: 'permission.requested', data: { requestId: 'r1', permissionRequest: { kind: 'shell', intention: 'run tests', command: 'secret --token x' } }, at: NOW - 60_000 },
+    { type: 'permission.requested', data: { requestId: 'r2', permissionRequest: { kind: 'write' } }, at: NOW - 30_000 },
+  ]);
+  const [lane] = await rows(testDeps(home, { app }));
+  assert.equal(lane.awaiting, 'permission');
+  assert.equal(lane.state, 'waiting');
+  assert.deepEqual(lane.prompt, { requestId: 'r1', what: 'run a shell command (run tests)', at: new Date(NOW - 60_000).toISOString() });
+  assert.equal(lane.project, 'Project');
+  assert.equal(lane.projectId, 'p1');
+  assert.equal(lane.path, '/work/lane');
+  assert.equal(describePermission({ kind: 'extension-permission-access', extensionName: 'mail', capabilities: ['network', 'files'] }), 'let the extension mail network, files');
+  fs.rmSync(home, { recursive: true, force: true });
 });
 
 test('a session that is not running but whose loop stopped mid-turn is stuck, not idle', () => {

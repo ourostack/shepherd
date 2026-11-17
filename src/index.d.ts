@@ -338,3 +338,22 @@ export function stuckResumeConfig(file?: string): { enabled: boolean };
 export function stuckPlan(listed: AppSessionRow[], deps: Deps, now?: number): { id: string; name: string; resume: boolean; why: string }[];
 /** Sends one resume message to each stuck session whose loop stopped since it was last resumed. Returns how many the app took. */
 export function resumeStuck(listed: AppSessionRow[], deps: Deps, now?: number, opts?: { send?: (id: string, text: string) => Promise<{ ok: boolean; error: string | null }> }): Promise<number>;
+
+// Agent operations over the app's socket (src/operate.mjs). Each resolves to a plain result object, or rejects with ShepherdError.
+export interface AgentOperation { ok?: boolean; error?: string | null; [key: string]: unknown }
+export function sessions(deps: Deps, opts?: { state?: 'busy' | 'idle' | 'waiting' | 'stuck' }): Promise<{ summary: Record<string, number>; sessions: Record<string, unknown>[] }>;
+export function session(deps: Deps, id: string): Promise<Record<string, unknown>>;
+export function messages(deps: Deps, id: string, count?: number): Promise<Record<string, unknown>>;
+export function send(deps: Deps, args: { session_id: string; message: string; delivery_mode?: 'immediate' | 'enqueue' }): Promise<AgentOperation>;
+export function create(deps: Deps, args: { name?: string; project_id?: string; session_kind?: 'chat' | 'project'; workspace_type?: 'worktree' | 'branch'; branch_name?: string; kickoff?: { prompt?: string; mode?: 'interactive' | 'plan' | 'autopilot'; model?: string; agent?: string; reasoning_effort?: string; permission_mode?: 'allow-all' | 'manual' }; }): Promise<AgentOperation>;
+export function answer(deps: Deps, args: { session_id: string; answer: string }): Promise<AgentOperation>;
+export function plan(deps: Deps, args: { session_id: string; approved: boolean; selected_action?: string; feedback?: string }): Promise<AgentOperation>;
+export function archiveSession(deps: Deps, args: { session_id: string; owner_asked?: boolean }): Promise<AgentOperation>;
+export function show(deps: Deps, id: string): Promise<AgentOperation>;
+export function automation(deps: Deps, args: { session_id: string; clear?: boolean; prompt?: string; interval?: string; run_at?: string; every_minutes?: number; schedule_hour?: number; schedule_minute?: number; schedule_day?: number; cron_expression?: string; name?: string }): Promise<AgentOperation>;
+export function automationOf(deps: Deps, id: string): Promise<AgentOperation>;
+export function workflows(deps: Deps): Promise<AgentOperation>;
+export function runWorkflow(deps: Deps, id: string): Promise<AgentOperation>;
+/** Listens for the questions and plans the app's sessions ask, and records them for answer and plan. */
+export function listenPrompts(deps: Deps, opts?: { retryMs?: number; now?: () => number }): { stop(): void };
+export function applyFrame(pending: Record<string, unknown>, frame: Record<string, unknown>, at: string): boolean;

@@ -19,6 +19,7 @@ import { counts, healthDeps, pass, readWatch, renderWatch } from '../src/health-
 import { install } from '../src/install.mjs';
 import { renderQuota, renderReadings } from '../src/quota.mjs';
 import { runResident, watchDuties } from '../src/resident.mjs';
+import { AGENT_VERBS, parseAgentVerb, runAgent } from '../src/agent-cli.mjs';
 
 const USAGE = `shepherd: keeps the flock: the GitHub Copilot app's sessions, as work.
 
@@ -45,8 +46,25 @@ const USAGE = `shepherd: keeps the flock: the GitHub Copilot app's sessions, as 
   shepherd version [--json]                        the installed version (also --version)
   shepherd help                                    this text
 
-Exit codes: 0 ok, 1 the app's data could not be read, the history could not be restored, the agent could not load, or the app
-refused a sidebar change, 2 usage.`;
+Agent verbs (each takes flags, or one JSON object on stdin with --input -; --json prints one JSON result):
+  shepherd sessions [--state busy|idle|waiting|stuck] [--json]   every session in the sidebar: summary and per-session activity
+  shepherd session <id> [--json]                    one session, with what it waits on (awaiting_input)
+  shepherd messages <id> [--count <n>] [--json]     its last n messages (default 6), oldest first
+  shepherd send <id> --message <text> [--delivery immediate|enqueue] [--json]
+  shepherd create [--project <id|name> | --session-kind chat] [--name <title>] [--workspace-type worktree|branch]
+                  [--branch <name>] [--prompt <text>] [--mode interactive|plan|autopilot] [--model <m>] [--agent <a>]
+                  [--reasoning-effort <e>] [--permission-mode allow-all|manual] [--json]
+  shepherd answer <id> --answer <text> [--json]     answer a question this watch heard the session ask
+  shepherd plan <id> --approved true|false [--action <option>] [--feedback <text>] [--json]
+  shepherd archive <id> [--owner-asked] [--json]    archive a session this agent created (or, with --owner-asked, one the owner asked for)
+  shepherd automation <id> [--clear | --interval once|minutes|daily|weekly|cron --prompt <text> …] [--json]
+                                                    its automations (no fields), replace one, or clear it
+  shepherd workflows [--json]                       the app's workflows
+  shepherd run-workflow <id> [--json]               run one now
+  shepherd open <id> [--json]                       show a session in the app's window
+
+Exit codes: 0 ok, 1 the app's data could not be read, the history could not be restored, the agent could not load, the app
+refused a sidebar change, or an agent verb was refused or failed, 2 usage.`;
 
 const FLAGS = {
   status: ['json', 'copilot-home'],
@@ -75,6 +93,10 @@ function parse(argv) {
   const [verb, ...rest] = argv;
   if (verb === undefined || verb === 'help' || verb === '--help' || verb === '-h') return { verb: 'help' };
   if (verb === 'version' || verb === '--version' || verb === '-v') return { verb: 'version', opts: { json: rest.includes('--json') } };
+  if (AGENT_VERBS[verb]) {
+    const agent = parseAgentVerb(verb, rest);
+    return agent.error ? { error: agent.error } : { verb, agent };
+  }
   if (!FLAGS[verb]) return { error: [`unknown command "${verb}"`, 'shepherd help'] };
   const allowed = (flag) => FLAGS[verb].includes(flag);
   const opts = { json: false, quiet: false, status: false, dryRun: false, every: null, id: null, copilotHome: path.join(os.homedir(), '.copilot') };
@@ -250,6 +272,7 @@ else {
     else if (parsed.verb === 'retire') await retire(parsed.opts);
     else if (parsed.verb === 'wakes') await wakes(parsed.opts);
     else if (parsed.verb === 'stuck') await stuck(parsed.opts);
+    else if (parsed.agent) process.exitCode = await runAgent(parsed.agent);
     else await restore(parsed.opts);
   } catch (e) {
     if (e instanceof ShepherdError) process.stderr.write(`shepherd: ${e.code}: ${e.message}\n`);

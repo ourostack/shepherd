@@ -171,3 +171,19 @@ export function lastReply(lines, since) {
   }
   return out;
 }
+
+export const MESSAGE_MAX_CHARS = 4000;
+
+// The top-level user and assistant messages among these parsed events, oldest first. Text past MESSAGE_MAX_CHARS is cut and marked.
+export function messagesIn(events) {
+  const messages = [];
+  for (const event of events) {
+    if (!event || event.agentId !== undefined) continue;
+    const data = event.data && typeof event.data === 'object' ? event.data : {};
+    const text = typeof data.content === 'string' ? data.content : '';
+    if ((event.type === 'user.message' || event.type === 'assistant.message') && text.trim()) {
+      messages.push({ at: typeof event.timestamp === 'string' ? event.timestamp : null, role: event.type === 'user.message' ? 'user' : 'assistant', text: text.slice(0, MESSAGE_MAX_CHARS), ...(text.length > MESSAGE_MAX_CHARS ? { truncated: true } : {}) });
+    }
+  }
+  return messages;
+}
