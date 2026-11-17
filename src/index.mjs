@@ -9,3 +9,5 @@ export { renderSidebar, sidebarConfig, sidebarFile, sidebarPlan, tidy as sidebar
 export { rows } from './rows.mjs';
 export { retireConfig, retireDeps, retireFile, retireSessions, watchRetire } from './retire.mjs';
 export { noticeOversizedSessions, whereItLeftOff } from './size-watch.mjs';
+export { planWakes, readWakeStates, runDueWakes, runWakeRunners, runnerDeps, wakeStatusLines, wakesConfig, wakesFile } from './wakes.mjs';
+export { resumeStuck, stuckPlan, stuckResumeConfig, stuckResumeFile } from './stuck-resume.mjs';

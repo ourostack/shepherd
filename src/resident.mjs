@@ -1,11 +1,15 @@
 // `shepherd watch --every <s>`: the resident mode the launch agent runs. Each pass runs every duty in turn (the health
 // watch, then the quota balancer's tick, with apply, then the sidebar tidy, then the retire duty: hand-off retirement and the
-// size watch, once its config enables it). Passes never overlap, and a duty that throws is logged while the next one still runs.
+// size watch, then the wake runners and the stuck resume, each once its config enables it). Passes never overlap, and a duty
+// that throws is logged while the next one still runs.
 import { deps } from './sessions.mjs';
 import { healthDeps, pass } from './health-watch.mjs';
 import { config as quotaConfig, listen as listenQuota, tick as quotaTick } from './quota.mjs';
 import { sidebarConfig, tidy as sidebarTidy } from './sidebar.mjs';
 import { actionLine, retireConfig, retireDeps, watchRetire } from './retire.mjs';
+import { rows as sessionRows } from './rows.mjs';
+import { runDueWakes, wakesConfig } from './wakes.mjs';
+import { resumeStuck, stuckResumeConfig } from './stuck-resume.mjs';
 
 // Runs the duties every everyMs until stop() is true. The clock and the sleep are injected, so a test can run it on a fake one.
 export async function runResident({ everyMs, duties, now = () => Date.now(), sleep, stop = () => false, log = () => {} }) {
@@ -21,11 +25,13 @@ export async function runResident({ everyMs, duties, now = () => Date.now(), sle
 
 // The duties of one pass, in order. The balancer's listener starts on the first pass that finds the balancer enabled. The
 // sidebar tidy runs at most every everyMinutes (sidebar.json), and only when that config is enabled. The retire duty (hand-off
-// retirement, then the size watch) does nothing until its config file says "enabled": true.
+// retirement, then the size watch) does nothing until its config file says "enabled": true. The wake runners and the stuck
+// resume are off until wakes.json and stuck-resume.json say so; a runner's own cadence is checked on each pass.
 export function watchDuties({ copilotHome, quiet = false, say = () => {}, log = () => {} }) {
   const health = healthDeps({ copilotHome });
   let listener = null;
   let lastTidy = -Infinity;
+  const wakeDue = new Map();
   return [
     { name: 'health watch', run: () => pass({}, health, (line) => { if (!quiet) say(line); }) },
     {
@@ -62,6 +68,29 @@ export function watchDuties({ copilotHome, quiet = false, say = () => {}, log = 
         const r = await watchRetire(retireDeps({ copilotHome }), { apply: true });
         for (const err of r.errors) log(`shepherd: retire: ${err}`);
         for (const e of [...r.retire, ...r.size]) if (e.done && e.what !== 'flag' && !quiet) say(`retire: ${actionLine(e)}`);
+      },
+    },
+    {
+      name: 'wake runners',
+      run: async () => {
+        const cfg = wakesConfig();
+        if (!cfg.enabled || !cfg.runners.length) return;
+        const states = await runDueWakes(deps({ copilotHome }), cfg.runners, wakeDue);
+        let delivered = 0;
+        for (const [name, state] of Object.entries(states)) {
+          delivered += state.lastDelivered ?? 0;
+          if (state.lastError) log(`shepherd: wake runner ${name}: ${state.lastError}`);
+        }
+        if (!quiet && delivered) say(`wake runners: ${delivered} wake(s) delivered`);
+      },
+    },
+    {
+      name: 'stuck resume',
+      run: async () => {
+        if (!stuckResumeConfig().enabled) return;
+        const d = deps({ copilotHome });
+        const resumed = await resumeStuck(await sessionRows(d), d);
+        if (!quiet && resumed) say(`stuck resume: ${resumed} session(s) resumed`);
       },
     },
   ];

@@ -17,6 +17,8 @@ Shepherd keeps the GitHub Copilot app's sessions as work. Plain ESM, no build st
 - `rows(deps)` returns the sidebar's sessions over the app's socket: `id`, `name`, `state` (`working`, `waiting`, `stuck` or `idle`), `detail`, `isRunning`, `remote`, `coordinatingCreatorSessionId`, `parentSessionId`, `workspaceId`, `workspaceType`, `branch`, `projectRepo`, `openPullRequest`, `automation`, `awaiting`, `lastActivity`. Throws `ShepherdError` when the app is not serving.
 - `retireSessions(rows, deps, { apply })` archives handed-off sessions (their successor took a turn, and they were idle five minutes) and finished orphans (coordinator gone, a day idle). `noticeOversizedSessions(rows, deps, { apply })` flags histories over 500 MB, asks for hand-offs, and archives idle giants. `watchRetire(deps, { apply })` runs both, retire first. `apply` false is a plan that changes nothing. Each returns actions `{ what, id, name, reason, done, why }`.
 - `retireConfig(file?)` reads `~/.config/shepherd/retire.json` (`SHEPHERD_RETIRE_CONFIG`): `{ "enabled": true }` turns the retire duty on; no file is off.
+- `wakesConfig(file?)` reads `~/.config/shepherd/wakes.json` (`SHEPHERD_WAKES_CONFIG`): `{ "enabled": true, "runners": [{ "name", "command": [argv], "everySeconds", "delivery", "session"? }] }`; off unless enabled. `runDueWakes(deps, runners, due)` runs the due runners and delivers each wake (one at a time per session, `replaces` takes back queued messages, `done` reports each delivery). `planWakes(runners)` shows what they would send and sends nothing.
+- `stuckResumeConfig(file?)` reads `~/.config/shepherd/stuck-resume.json` (`SHEPHERD_STUCK_RESUME_CONFIG`): `{ "enabled": true }`; off unless enabled. `stuckPlan(rows, deps)` plans; `resumeStuck(rows, deps)` sends one resume to each stopped session, once per stop and at most three a day.
 - Errors are `ShepherdError` with `code`, `problem` and `fix`; the message reads `<problem>. Fix: <fix>.`
 
 ## CLI
@@ -24,15 +26,17 @@ Shepherd keeps the GitHub Copilot app's sessions as work. Plain ESM, no build st
 - `shepherd status [--json] [--copilot-home <dir>]`: one line per local session.
 - `shepherd restore-history <id> [--json]`: puts back an archived session's compressed history, for a session unarchived by hand.
 - `shepherd watch [--quiet] [--json]`: one pass of the six-hour health watch over the resumed sessions (roster from `<state>/resume-last.json`, state in `<state>/health-watch.json`), then exit. A session that stays broken is reported to the agent with `ouro msg`.
-- `shepherd watch --every <seconds> [--quiet]`: stays resident. Each pass runs the health watch, then the quota balancer's applied tick (only when its config says enabled), then the sidebar tidy (at most every `everyMinutes` in `sidebar.json`, only when enabled), then the retire duties (only when `retire.json` says enabled). Passes never overlap; a duty that throws is logged and the next still runs.
+- `shepherd watch --every <seconds> [--quiet]`: stays resident. Each pass runs the health watch, then the quota balancer's applied tick (only when its config says enabled), then the sidebar tidy (at most every `everyMinutes` in `sidebar.json`, only when enabled), then the retire duties (only when `retire.json` says enabled), then the wake runners and the stuck resume (only when `wakes.json` and `stuck-resume.json` say enabled). Passes never overlap; a duty that throws is logged and the next still runs.
 - `shepherd watch --status [--json]`: what the health watch is following: healthy, waiting, asked again, broken.
 - `shepherd quota [read|plan|status] [--json]`: each Copilot account's quota; plan is what a tick would do; status is the last applied tick. None changes anything.
 - `shepherd sidebar [plan|apply] [--json]`: which projects the sidebar shows; plan (the default) changes nothing; apply asks the app to show or hide the changed projects and needs `sidebar.json` to say `"enabled": true`.
 - `shepherd retire [plan|apply] [--json]`: retirement and the size watch. plan (the default) changes nothing; apply archives, flags and asks, and refuses unless `retire.json` enables it.
+- `shepherd wakes [status|poll] [--json]`: each wake runner's last run, wakes delivered, open wakes and status lines (status, the default). `poll` runs each command now and sends its wakes only when `wakes.json` says enabled; otherwise it prints what it would send.
+- `shepherd stuck [plan] [--json]`: the stopped sessions and what a stuck resume would do. plan (the default) changes nothing.
 - `shepherd install [--dry-run]`: loads `~/Library/LaunchAgents/bot.ouro.shepherd.plist`, which runs `shepherd watch --every 60 --quiet` and is kept alive. `--dry-run` prints the plist and changes nothing.
 - `shepherd version [--json]` (also `--version`) prints the installed version.
 - `shepherd help`.
-- Run it without installing: `npx github:ourostack/shepherd#v0.6.0 status --json` (not on npm yet).
+- Run it without installing: `npx github:ourostack/shepherd#v0.7.0 status --json` (not on npm yet).
 - Exit codes: 0 ok, 1 the app's data could not be read, the history could not be restored, the agent could not load, or the app refused a sidebar change, 2 usage. Errors are one line.
 
 ## Quota balancing
@@ -47,7 +51,7 @@ Shepherd keeps the GitHub Copilot app's sessions as work. Plain ESM, no build st
 
 ## Rules
 
-- Shepherd is read-only except `sendTo`, `archive`, `compressHistory`, `restoreHistory`, `resume` (its record in the state folder), `watch` (its state folder and the agent notice), the retire duties (their state folder, the archive log, and the agent notice; only when `retire.json` is enabled), `install` (the launch agent), an applied quota tick (its state, log and waiting files, and the re-pins and messages it decides on, only when its config is enabled) and `sidebarTidy` with apply (the app's show or hide requests, only when `sidebar.json` is enabled). It compresses only archived or unlisted sessions, never a live one. It never quits or relaunches the app; that is Housesitter's job.
+- Shepherd is read-only except `sendTo`, `archive`, `compressHistory`, `restoreHistory`, `resume` (its record in the state folder), `watch` (its state folder and the agent notice), the retire duties (their state folder, the archive log, and the agent notice; only when `retire.json` is enabled), the wake runners and the stuck resume (their state folder, and the wakes and resumes they send; only when `wakes.json` or `stuck-resume.json` is enabled), `install` (the launch agent), an applied quota tick (its state, log and waiting files, and the re-pins and messages it decides on, only when its config is enabled) and `sidebarTidy` with apply (the app's show or hide requests, only when `sidebar.json` is enabled). It compresses only archived or unlisted sessions, never a live one. It never quits or relaunches the app; that is Housesitter's job.
 - Every failure says what probably happened and the fix.
 - Tests run against fakes (`test/fake-app.mjs` is a pretend socket). The real database test and CLI status test run only where `/usr/bin/sqlite3` exists.
 - Keep it small. A duty moves here only when a caller needs it.

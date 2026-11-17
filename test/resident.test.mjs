@@ -64,3 +64,29 @@ test('the retire duty does nothing with no retire.json, and a bad one fails that
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('the wake runners and the stuck resume do nothing until their configs enable them, so nothing runs twice', async () => {
+  const { watchDuties: duties } = await import('../src/resident.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'resident-wakes-'));
+  const keys = ['HOME', 'SHEPHERD_WAKES_CONFIG', 'SHEPHERD_STUCK_RESUME_CONFIG'];
+  const was = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+  try {
+    process.env.HOME = dir;
+    process.env.SHEPHERD_WAKES_CONFIG = path.join(dir, 'wakes.json');
+    process.env.SHEPHERD_STUCK_RESUME_CONFIG = path.join(dir, 'stuck-resume.json');
+    const marker = path.join(dir, 'ran');
+    const runner = { name: 'issues', command: [process.execPath, '-e', `require('fs').writeFileSync(${JSON.stringify(marker)}, 'x'); process.stdout.write('{"wakes":[]}')`] };
+    fs.writeFileSync(process.env.SHEPHERD_WAKES_CONFIG, JSON.stringify({ enabled: false, runners: [runner] }));
+    const watch = duties({ copilotHome: dir });
+    await watch.find((d) => d.name === 'wake runners').run();
+    await watch.find((d) => d.name === 'stuck resume').run();
+    assert.equal(fs.existsSync(marker), false, 'a runner in a disabled config does not run');
+    fs.writeFileSync(process.env.SHEPHERD_WAKES_CONFIG, JSON.stringify({ enabled: true, runners: [runner] }));
+    await watch.find((d) => d.name === 'wake runners').run();
+    assert.equal(fs.existsSync(marker), true, 'an enabled runner runs on the pass');
+    assert.equal(fs.existsSync(path.join(dir, 'Library', 'Caches', 'shepherd', 'wake-runners.json')), true, 'and its state is kept');
+  } finally {
+    for (const k of keys) if (was[k] === undefined) delete process.env[k]; else process.env[k] = was[k];
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
