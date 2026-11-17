@@ -287,8 +287,9 @@ export async function archiveSession(d, args) {
     reason = args.owner_asked === true ? 'owner-asked' : handedOff(d, row) ? 'handed-off' : null;
     if (!reason) throw new ShepherdError({ code: 'not-created-here', problem: `session ${row.id} was not created by this agent, so it will not archive it unless the owner asked for it or it is oversize and a newer session names it as handed off (yours: ${Object.keys(made).join(', ') || 'none'})`, fix: 'pass --owner-asked only when the owner asked for this session in this conversation' });
   }
-  // Not compressed: the app's own archive is all Ouroboros's archive did, and a history stays readable until someone asks.
-  const archived = await archive(d, row, { waitMs: ARCHIVE_WAIT_MS, compress: false });
+  // Compressed in the same pass, like every Shepherd archive: a finished history loses nothing, and sendTo or restore-history
+  // brings it back if the session is ever restored.
+  const archived = await archive(d, row, { waitMs: ARCHIVE_WAIT_MS });
   if (archived.ok) {
     removeProbe(d, row.id);
     if (reason) logArchive(d, { id: row.id, name: row.name, reason });

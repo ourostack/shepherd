@@ -43,7 +43,7 @@ Shepherd keeps the GitHub Copilot app's sessions as work. Plain ESM, no build st
 - `shepherd create [--project <id|name> | --session-kind chat] [--name] [--workspace-type worktree|branch] [--branch] [--prompt] [--mode] [--model] [--agent] [--reasoning-effort] [--permission-mode] [--json]`: `{ ok, created, session_id, app_url, kind, error? }`.
 - `shepherd answer <id> --answer <text> [--json]`: answers a question the resident watch heard the session ask.
 - `shepherd plan <id> --approved true|false [--action] [--feedback] [--json]`: approves or rejects a plan the resident watch heard.
-- `shepherd archive <id> [--owner-asked] [--json]`: archives a session this agent created, or one the owner asked for with `--owner-asked`, or a handed-off oversize one.
+- `shepherd archive <id> [--owner-asked] [--json]`: archives a session this agent created, or one the owner asked for with `--owner-asked`, or a handed-off oversize one; the history is compressed in the same pass (restore-history brings it back).
 - `shepherd automation <id> [--clear | --interval … --prompt …] [--json]`: reads, replaces or clears the session's automation.
 - `shepherd workflows [--json]` and `shepherd run-workflow <id> [--json]`: list the app's workflows, run one now.
 - `shepherd open <id> [--json]`: shows the session in the app's window.
