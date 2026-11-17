@@ -60,6 +60,8 @@ npx github:ourostack/shepherd#v0.8.1 help
 
 ## For agents: the CLI contract
 
+The CLI is built on the Ouro AX kit (vendored in `lib/ouro-ui`): `shepherd help` and `<verb> --help` are generated, and a usage error names what probably happened, how to look further and the fix. The kit is TypeScript that Node runs only from a checkout or release folder, not from under `node_modules`, so install the CLI from a release folder; the library (`src/index.mjs`) stays plain JavaScript.
+
 Each verb below takes its arguments as flags, or as one JSON object on stdin with `--input -` (keys are the flag names with underscores, for example `session_id`, `delivery_mode`, and `kickoff: { prompt, mode, … }`; a flag wins over the input). `--json` prints one line of JSON: the result, or `{ "ok": false, "code", "error" }` on failure. Exit codes: 0 ok, 1 refused or failed, 2 usage. A session id is the whole id or its first 8 or more characters.
 
 | Verb | Flags | JSON result |
