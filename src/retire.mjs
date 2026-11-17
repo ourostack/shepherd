@@ -19,7 +19,7 @@ import { coordinatorOf } from './coordinator.mjs';
 import { refreshSuccessions, successorOf } from './handoff.mjs';
 import { plain } from './notice.mjs';
 import { rows } from './rows.mjs';
-import { DELIVER_MS, archiveRow } from './store.mjs';
+import { DELIVER_MS, archiveRow, identityId } from './store.mjs';
 import { deps } from './sessions.mjs';
 import { sendTo } from './socket.mjs';
 import { noticeOversizedSessions, whereItLeftOff } from './size-watch.mjs';
@@ -123,7 +123,8 @@ export async function watchRetire(d, { apply = false } = {}) {
   const out = { retire: [], size: [], errors: [] };
   let listed;
   try {
-    listed = await rows(d);
+    const mine = identityId(d);
+    listed = (await rows(d)).filter((row) => row.id !== mine);
   } catch (e) {
     out.errors.push(`could not list the app's sessions: ${e.message}`);
     return out;

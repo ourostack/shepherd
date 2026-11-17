@@ -6,6 +6,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { deps } from '../src/index.mjs';
 import { send, RELAYED_LABEL } from '../src/operate.mjs';
+import { relayOutcome } from '../src/peer.mjs';
+import { archive } from '../src/socket.mjs';
+import { watchRetire } from '../src/retire.mjs';
 import { formatForApp } from '../src/format.mjs';
 import { startFakeApp } from './fake-app.mjs';
 import { CHAT_SESSION, copilotReplies } from './fake-copilot.mjs';
@@ -81,4 +84,24 @@ test('formatForApp wraps paths and commands in code and escapes a stray tilde', 
   assert.equal(formatForApp('already `~/a` and https://x.test/~u stay'), 'already `~/a` and https://x.test/~u stay');
   assert.equal(formatForApp('about ~5 minutes'), 'about \\~5 minutes');
   assert.equal(formatForApp('```\n~/a\n```'), '```\n~/a\n```');
+});
+
+test('a retry after a bad call counts as sent, and extra arguments count as altered', async () => {
+  const args = { session_id: TARGET, delivery_mode: 'immediate', message: 'hi' };
+  const at = new Date().toISOString();
+  const start = (id, a) => JSON.stringify({ type: 'tool.execution_start', timestamp: at, data: { toolCallId: id, toolName: 'send_session_message', arguments: a } });
+  const end = (id, success) => JSON.stringify({ type: 'tool.execution_complete', timestamp: at, data: { toolCallId: id, success } });
+  const extra = { ...args, source_user_message: { id: 'x' } };
+  assert.equal(relayOutcome([start('a', extra), end('a', false), start('b', args), end('b', true)], args, 0).state, 'sent');
+  assert.equal(relayOutcome([start('a', extra), end('a', true)], args, 0).state, 'altered');
+});
+
+test('the identity chat is never archived, and the retire watch leaves it out', async () => {
+  await withRelay('ok', async ({ d }) => {
+    fs.mkdirSync(d.state, { recursive: true });
+    fs.writeFileSync(path.join(d.state, 'identity.json'), JSON.stringify({ session_id: CHAT_SESSION }));
+    assert.deepEqual(await archive(d, { id: CHAT_SESSION }), { ok: false, error: "Ouroboros' own chat is the sender of its peer messages and is never archived" });
+    const out = await watchRetire(d, { apply: true });
+    assert.deepEqual(out.retire.filter((e) => e.id === CHAT_SESSION), []);
+  });
 });
