@@ -21,5 +21,8 @@
   "repository": { "type": "git", "url": "git+https://github.com/ourostack/shepherd.git" },
   "bugs": "https://github.com/ourostack/shepherd/issues",
   "license": "MIT",
-  "author": "Ari Mendelow"
+  "author": "Ari Mendelow",
+  "imports": {
+    "#ouro-ax/*": "./lib/ouro-ui/registry/ouro/ax/*"
+  }
 }

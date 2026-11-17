@@ -1,0 +1,350 @@
+{
+  "generator": "ouro-actions 0.17.6",
+  "set": "shepherd",
+  "tool": "shepherd",
+  "actions": [
+    {
+      "id": "sessions",
+      "consent": "read",
+      "label": "List the sessions",
+      "description": "Every session in the sidebar: a summary and each session's activity.",
+      "agent": "List the app's sessions and what each is doing. Read-only.",
+      "input": {
+        "state": {
+          "label": "State",
+          "description": "Keep only the sessions in this state.",
+          "values": [
+            "busy",
+            "idle",
+            "waiting",
+            "stuck"
+          ],
+          "optional": true,
+          "kind": "enum"
+        }
+      },
+      "output": {
+        "ok": {
+          "label": "Done",
+          "description": "True when the app did it; false when it was refused, with the reason in the result.",
+          "kind": "boolean"
+        }
+      },
+      "cli": "sessions"
+    },
+    {
+      "id": "session",
+      "consent": "read",
+      "label": "Read one session",
+      "description": "One session, with what it waits on.",
+      "agent": "Read one session and the question or plan it waits on, if any. Read-only.",
+      "input": {
+        "id": {
+          "label": "Session",
+          "description": "The session: its whole id, or the first 8 or more characters of it.",
+          "arg": true,
+          "kind": "string"
+        }
+      },
+      "output": {
+        "ok": {
+          "label": "Done",
+          "description": "True when the app did it; false when it was refused, with the reason in the result.",
+          "kind": "boolean"
+        }
+      },
+      "cli": "session"
+    },
+    {
+      "id": "messages",
+      "consent": "read",
+      "label": "Read a session's messages",
+      "description": "A session's last messages, oldest first.",
+      "agent": "Read the last messages of a session. Read-only.",
+      "input": {
+        "id": {
+          "label": "Session",
+          "description": "The session: its whole id, or the first 8 or more characters of it.",
+          "arg": true,
+          "kind": "string"
+        },
+        "count": {
+          "label": "Count",
+          "description": "How many messages. Defaults to 6.",
+          "optional": true,
+          "min": 1,
+          "kind": "integer"
+        }
+      },
+      "output": {
+        "ok": {
+          "label": "Done",
+          "description": "True when the app did it; false when it was refused, with the reason in the result.",
+          "kind": "boolean"
+        }
+      },
+      "cli": "messages"
+    },
+    {
+      "id": "workflows",
+      "consent": "read",
+      "label": "List the workflows",
+      "description": "The app's workflows.",
+      "agent": "List the app's workflows. Read-only.",
+      "input": {},
+      "output": {
+        "ok": {
+          "label": "Done",
+          "description": "True when the app did it; false when it was refused, with the reason in the result.",
+          "kind": "boolean"
+        }
+      },
+      "cli": "workflows"
+    },
+    {
+      "id": "open",
+      "consent": "read",
+      "label": "Show a session",
+      "description": "Show a session in the app's window.",
+      "agent": "Bring a session to the front of the app's window. Read-only.",
+      "input": {
+        "id": {
+          "label": "Session",
+          "description": "The session: its whole id, or the first 8 or more characters of it.",
+          "arg": true,
+          "kind": "string"
+        }
+      },
+      "output": {
+        "ok": {
+          "label": "Done",
+          "description": "True when the app did it; false when it was refused, with the reason in the result.",
+          "kind": "boolean"
+        }
+      },
+      "cli": "open"
+    },
+    {
+      "id": "send",
+      "consent": "consequential",
+      "label": "Message a session",
+      "description": "Send a message to a session, as a peer message.",
+      "agent": "Send a message to a session, which its owner may read. A person says yes first.",
+      "input": {
+        "id": {
+          "label": "Session",
+          "description": "The session: its whole id, or the first 8 or more characters of it.",
+          "arg": true,
+          "kind": "string"
+        },
+        "message": {
+          "label": "Message",
+          "description": "The text to send.",
+          "kind": "string"
+        },
+        "delivery": {
+          "label": "Delivery",
+          "description": "Now, or behind what the session is doing.",
+          "values": [
+            "immediate",
+            "enqueue"
+          ],
+          "optional": true,
+          "kind": "enum"
+        }
+      },
+      "output": {
+        "ok": {
+          "label": "Done",
+          "description": "True when the app did it; false when it was refused, with the reason in the result.",
+          "kind": "boolean"
+        }
+      },
+      "cli": "send"
+    },
+    {
+      "id": "create",
+      "consent": "consequential",
+      "label": "Create a session",
+      "description": "Make a session on a project (or a chat), optionally with a first prompt.",
+      "agent": "Create a session in the app, which its owner will see. A person says yes first.",
+      "input": {
+        "project": {
+          "label": "Project",
+          "description": "The project, by id or name.",
+          "optional": true,
+          "kind": "string"
+        },
+        "name": {
+          "label": "Name",
+          "description": "The title.",
+          "optional": true,
+          "kind": "string"
+        },
+        "prompt": {
+          "label": "Prompt",
+          "description": "The first prompt.",
+          "optional": true,
+          "kind": "string"
+        }
+      },
+      "output": {
+        "ok": {
+          "label": "Done",
+          "description": "True when the app did it; false when it was refused, with the reason in the result.",
+          "kind": "boolean"
+        }
+      },
+      "cli": "create"
+    },
+    {
+      "id": "answer_question",
+      "consent": "consequential",
+      "label": "Answer a session's question",
+      "description": "Answer a question the watch heard the session ask.",
+      "agent": "Answer a question a session asked, as the session's owner would. A person says yes first.",
+      "input": {
+        "id": {
+          "label": "Session",
+          "description": "The session: its whole id, or the first 8 or more characters of it.",
+          "arg": true,
+          "kind": "string"
+        },
+        "answer": {
+          "label": "Answer",
+          "description": "The answer.",
+          "kind": "string"
+        }
+      },
+      "output": {
+        "ok": {
+          "label": "Done",
+          "description": "True when the app did it; false when it was refused, with the reason in the result.",
+          "kind": "boolean"
+        }
+      },
+      "cli": "answer"
+    },
+    {
+      "id": "plan",
+      "consent": "consequential",
+      "label": "Approve or reject a plan",
+      "description": "Approve or reject a plan the watch heard a session offer.",
+      "agent": "Approve or reject a plan a session offered. A person says yes first.",
+      "input": {
+        "id": {
+          "label": "Session",
+          "description": "The session: its whole id, or the first 8 or more characters of it.",
+          "arg": true,
+          "kind": "string"
+        },
+        "approved": {
+          "label": "Approved",
+          "description": "True to approve, false to reject.",
+          "kind": "boolean"
+        },
+        "feedback": {
+          "label": "Feedback",
+          "description": "What to tell the session.",
+          "optional": true,
+          "kind": "string"
+        }
+      },
+      "output": {
+        "ok": {
+          "label": "Done",
+          "description": "True when the app did it; false when it was refused, with the reason in the result.",
+          "kind": "boolean"
+        }
+      },
+      "cli": "plan"
+    },
+    {
+      "id": "archive",
+      "consent": "consequential",
+      "label": "Archive a session",
+      "description": "Archive a session this agent created, or one the owner asked to archive.",
+      "agent": "Archive a session. A person says yes first.",
+      "input": {
+        "id": {
+          "label": "Session",
+          "description": "The session: its whole id, or the first 8 or more characters of it.",
+          "arg": true,
+          "kind": "string"
+        },
+        "ownerAsked": {
+          "label": "Owner asked",
+          "description": "The owner asked for this archive, so a session this agent did not create may go.",
+          "optional": true,
+          "kind": "boolean"
+        }
+      },
+      "output": {
+        "ok": {
+          "label": "Done",
+          "description": "True when the app did it; false when it was refused, with the reason in the result.",
+          "kind": "boolean"
+        }
+      },
+      "cli": "archive"
+    },
+    {
+      "id": "automation",
+      "consent": "consequential",
+      "label": "Read or change a session's automation",
+      "description": "A session's automations (with no fields), replace one, or clear it.",
+      "agent": "Read, replace or clear a session's automation, which sends messages on a schedule. A person says yes first.",
+      "input": {
+        "id": {
+          "label": "Session",
+          "description": "The session: its whole id, or the first 8 or more characters of it.",
+          "arg": true,
+          "kind": "string"
+        },
+        "clear": {
+          "label": "Clear",
+          "description": "Remove the session's automation.",
+          "optional": true,
+          "kind": "boolean"
+        },
+        "prompt": {
+          "label": "Prompt",
+          "description": "What the automation sends.",
+          "optional": true,
+          "kind": "string"
+        }
+      },
+      "output": {
+        "ok": {
+          "label": "Done",
+          "description": "True when the app did it; false when it was refused, with the reason in the result.",
+          "kind": "boolean"
+        }
+      },
+      "cli": "automation"
+    },
+    {
+      "id": "run_workflow",
+      "consent": "consequential",
+      "label": "Run a workflow",
+      "description": "Run one workflow now.",
+      "agent": "Run one of the app's workflows now. A person says yes first.",
+      "input": {
+        "id": {
+          "label": "Workflow",
+          "description": "The workflow's id, from workflows.",
+          "arg": true,
+          "kind": "string"
+        }
+      },
+      "output": {
+        "ok": {
+          "label": "Done",
+          "description": "True when the app did it; false when it was refused, with the reason in the result.",
+          "kind": "boolean"
+        }
+      },
+      "cli": "run-workflow"
+    }
+  ]
+}

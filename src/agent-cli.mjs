@@ -146,16 +146,16 @@ export function agentCommands({ guard, copilotHome }) {
     const flags = {
       ...Object.fromEntries((spec.options ?? []).map(([flag, key, description]) => [flag, { ...flagSpec(key, description), ...(required.includes(key) ? { required: true, unless: 'input' } : {}) }])),
       ...Object.fromEntries((spec.switches ?? []).map(([flag, , description]) => [flag, { type: 'boolean', description }])),
-      input: { type: 'string', stdin: true, placeholder: '-', description: 'Read one JSON object from stdin instead of flags: the tool arguments, such as session_id, as its keys. A flag wins over it.' },
+      input: { type: 'string', stdin: true, placeholder: '<json>', description: 'One JSON object instead of flags: the tool arguments, such as session_id, as its keys; "-" reads it from stdin. A flag wins over it.' },
     };
     return defineCommand({
       name: verb,
       summary: spec.summary,
       effect: spec.read ? 'private' : 'others',
       ...(spec.read ? {} : { why: 'optional' }),
-      args: spec.positional ? [{ name: 'id', required: true, unless: 'input', description: spec.positional === 'session_id' ? 'The session: its whole id, or the first 8 or more characters of it.' : 'The id, as shepherd lists it.' }] : [],
+      args: spec.positional ? [{ name: 'id', required: true, unless: 'input', source: spec.positional === 'session_id' ? 'sessions' : spec.summary.startsWith('Run') ? 'workflows' : 'sessions', description: spec.positional === 'session_id' ? 'The session: its whole id, or the first 8 or more characters of it.' : 'The id, as shepherd lists it.' }] : [],
       flags,
-      output: '{ ok, … } as the operation answers; { ok: false, code, error } when it could not',
+      output: '{ ok, … } as the operation answers; { ok: false, code, error } with the reason when the app refused or did not answer',
       exit: (r) => (failed(r) ? 'error' : 'ok'),
       text: (r) => renderText(verb, r),
       plan: (input) => outcome({
