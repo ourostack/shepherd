@@ -36,6 +36,7 @@ flowchart LR
 | The 500 MB resume cap | here now |
 | Size watch and hand-off retirement | here now, off until `retire.json` enables it |
 | Stuck resume | here now, off until `stuck-resume.json` enables it |
+| Repository trust | here now, off until `trust.json` enables it |
 | The six-hour health watch | here now |
 | Billing account and quota | here now |
 | Sidebar tidy | here now |
@@ -151,6 +152,10 @@ Write `~/.config/shepherd/wakes.json`:
 - A session gets one wake at a time: while the last one has not reached its log, the next is held and offered again on the next run. A wake still missing after 30 minutes is taken as lost.
 
 `SHEPHERD_WAKES_CONFIG` overrides the file. `shepherd wakes` shows each runner's last run, wakes delivered and open wakes. `shepherd wakes poll` runs each command now: it sends the wakes only when the config enables them, and otherwise shows what it would send.
+
+## Repository trust
+
+The GitHub Copilot app holds every session in a repository project at "Ask every time" until someone presses the trust button on that project, and it has no setting that trusts them all. The button writes three rows in the app's own database (`project_host_trust`, `project_future_config_trust`, `project_trust_revisions`). Each watch pass writes the same rows, in one SQLite transaction, for every local repository project that lacks them, copying the config hash of a project that is already trusted, and logs each project it trusted. The app reads them live, so a session started afterwards does not wait. Remote projects are left alone. It does nothing until `~/.config/shepherd/trust.json` says `{ "enabled": true }` (`SHEPHERD_TRUST_CONFIG` overrides the file). `shepherd trust` lists the projects it would trust and changes nothing; `shepherd trust apply` trusts them now.
 
 ## Stuck resume
 

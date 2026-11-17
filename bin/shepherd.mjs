@@ -13,7 +13,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ShepherdError, deps, planWakes, quotaConfig, quotaRead, quotaStatus, quotaTick, readWakeStates, rows, restoreHistory, runWakeRunners, runnerDeps, sidebarConfig, sidebarFile, sidebarTidy, renderSidebar, snapshot, stateDir, stuckPlan, stuckResumeConfig, stuckResumeFile, wakeStatusLines, wakesConfig, wakesFile } from '../src/index.mjs';
+import { ShepherdError, deps, planWakes, quotaConfig, quotaRead, quotaStatus, quotaTick, readWakeStates, rows, restoreHistory, runWakeRunners, runnerDeps, sidebarConfig, sidebarFile, sidebarTidy, renderSidebar, snapshot, stateDir, stuckPlan, stuckResumeConfig, stuckResumeFile, trustAll, trustConfig, trustFile, untrusted, wakeStatusLines, wakesConfig, wakesFile } from '../src/index.mjs';
 import { renderRetire, retireConfig, retireDeps, retireFile, watchRetire } from '../src/retire.mjs';
 import { counts, healthDeps, pass, readWatch, renderWatch } from '../src/health-watch.mjs';
 import { install } from '../src/install.mjs';
@@ -42,6 +42,9 @@ const USAGE = `shepherd: keeps the flock: the GitHub Copilot app's sessions, as 
   shepherd stuck [plan] [--json]                   sessions whose loop stopped, and what a stuck resume would do (plan, the
                                                    default, changes nothing); the watch resumes them only when stuck-resume.json
                                                    says "enabled": true
+  shepherd trust [plan|apply] [--json]             the local repository projects the app has not trusted (plan, the default, changes
+                                                   nothing); apply trusts them. The watch does it each pass when trust.json says
+                                                   "enabled": true
   shepherd install [--dry-run]                     load the launch agent that runs "watch --every 60 --quiet" (--dry-run prints it)
   shepherd version [--json]                        the installed version (also --version)
   shepherd help                                    this text
@@ -75,6 +78,7 @@ const FLAGS = {
   retire: ['json', 'copilot-home', 'id'],
   wakes: ['json', 'copilot-home', 'id'],
   stuck: ['json', 'copilot-home', 'id'],
+  trust: ['json', 'copilot-home', 'id'],
   install: ['dry-run'],
 };
 
@@ -83,6 +87,7 @@ const SIDEBAR_SUBS = ['plan', 'apply'];
 const RETIRE_SUBS = ['plan', 'apply'];
 const WAKES_SUBS = ['status', 'poll'];
 const STUCK_SUBS = ['plan'];
+const TRUST_SUBS = ['plan', 'apply'];
 
 const usage = (problem, fix) => {
   process.stderr.write(`shepherd: usage: ${problem}. Fix: ${fix}.\n`);
@@ -121,6 +126,7 @@ function parse(argv) {
   if (verb === 'retire' && opts.id !== null && !RETIRE_SUBS.includes(opts.id)) return { error: [`retire takes plan or apply, not "${opts.id}"`, 'shepherd retire plan'] };
   if (verb === 'wakes' && opts.id !== null && !WAKES_SUBS.includes(opts.id)) return { error: [`wakes takes status or poll, not "${opts.id}"`, 'shepherd wakes status'] };
   if (verb === 'stuck' && opts.id !== null && !STUCK_SUBS.includes(opts.id)) return { error: [`stuck takes plan, not "${opts.id}"`, 'shepherd stuck plan'] };
+  if (verb === 'trust' && opts.id !== null && !TRUST_SUBS.includes(opts.id)) return { error: [`trust takes plan or apply, not "${opts.id}"`, 'shepherd trust plan'] };
   if (verb === 'watch' && opts.every !== null && opts.status) return { error: ['--every and --status cannot be used together', 'shepherd watch --status'] };
   return { verb, opts };
 }
@@ -244,6 +250,18 @@ async function stuck({ json, copilotHome }) {
   for (const s of sessions) process.stdout.write(`${s.resume ? 'would resume' : 'would leave'}  ${s.id.slice(0, 8)}  ${s.name}  (${s.why})\n`);
 }
 
+async function trust({ json, copilotHome, id: sub }) {
+  const file = trustFile();
+  const enabled = trustConfig(file).enabled;
+  const d = deps({ copilotHome });
+  const r = sub === 'apply' ? await trustAll(d) : { trusted: await untrusted(d), skipped: null };
+  if (json) { process.stdout.write(`${JSON.stringify({ enabled, file, applied: sub === 'apply', projects: r.trusted, skipped: r.skipped })}\n`); return; }
+  if (!enabled) process.stdout.write(`auto-trust is off: ${file} does not say "enabled": true\n`);
+  if (r.skipped) process.stdout.write(`${r.skipped}\n`);
+  if (!r.trusted.length) process.stdout.write('every local repository project is trusted\n');
+  for (const p of r.trusted) process.stdout.write(`${sub === 'apply' ? 'trusted' : 'would trust'}  ${p.name}  (${p.id})\n`);
+}
+
 async function installAgent({ dryRun }) {
   const r = await install({ dry: dryRun });
   if (dryRun) { process.stdout.write(r.text); return; }
@@ -272,6 +290,7 @@ else {
     else if (parsed.verb === 'retire') await retire(parsed.opts);
     else if (parsed.verb === 'wakes') await wakes(parsed.opts);
     else if (parsed.verb === 'stuck') await stuck(parsed.opts);
+    else if (parsed.verb === 'trust') await trust(parsed.opts);
     else if (parsed.agent) process.exitCode = await runAgent(parsed.agent);
     else await restore(parsed.opts);
   } catch (e) {

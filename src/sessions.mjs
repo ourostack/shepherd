@@ -55,6 +55,15 @@ function sqlite(copilotHome, query) {
   }));
 }
 
+// Runs a write script against the app's database as one transaction (the caller's SQL, wrapped); resolves when SQLite commits it.
+function sqliteWrite(copilotHome, script) {
+  const db = path.join(copilotHome, 'data.db');
+  return new Promise((resolve, reject) => execFile(SQLITE, ['-cmd', '.timeout 5000', db, `BEGIN IMMEDIATE;\n${script}\nCOMMIT;`], { timeout: 30000 }, (err, stdout, stderr) => {
+    if (err) return reject(new ShepherdError({ code: 'sqlite-refused', problem: `SQLite refused a write to the app's database at ${db}: ${String(stderr).trim().slice(0, 160) || err.message}`, fix: 'quit and reopen the GitHub Copilot app, then try again' }));
+    resolve();
+  }));
+}
+
 // The app-facing deps: the database (read-only), each session's history, the socket, and the clock. Tests pass fakes instead.
 // The history is compressed with gzip; the disk ledger is a JSON-lines file that Housesitter's disk job also writes to.
 export function deps({ copilotHome = path.join(os.homedir(), '.copilot'), ledger = process.env.SHEPHERD_DISK_LEDGER || path.join(os.homedir(), 'Library', 'Caches', 'housesitter', 'restart-copilot', 'disk-ledger.jsonl'), state = stateDir() } = {}) {
@@ -64,6 +73,7 @@ export function deps({ copilotHome = path.join(os.homedir(), '.copilot'), ledger
     now: () => Date.now(),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     sql: (query) => sqlite(copilotHome, query),
+    sqlWrite: (script) => sqliteWrite(copilotHome, script),
     history: (id) => {
       const f = historyFile(copilotHome, id);
       try { return { lines: readTail(f), mtime: fs.statSync(f).mtimeMs }; } catch { return { lines: [], mtime: 0 }; }
