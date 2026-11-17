@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ShepherdError } from './error.mjs';
+import { identityId } from './store.mjs';
 import { compressHistory, restoreHistory, waitForArchive } from './compress.mjs';
 
 export const ARCHIVE_WAIT_MS = 20000;
@@ -68,6 +69,7 @@ export async function sendTo(deps, id, prompt, waitMs, delivery = 'immediate') {
 // its worktree only when the row says it is one and keepWorktree is not set; a row without one archives the session.
 // Once the app confirms, the session's history is compressed (after the app's database shows it archived).
 export async function archive(deps, row, { keepWorktree = false, waitMs = ARCHIVE_WAIT_MS, compress = true } = {}) {
+  if (row.id === identityId(deps)) return { ok: false, error: "Ouroboros' own chat is the sender of its peer messages and is never archived" };
   const request_id = randomUUID();
   const workspace = Boolean(row.workspaceId);
   const msg = workspace

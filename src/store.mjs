@@ -5,10 +5,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { archive } from './socket.mjs';
 
-export const FILES = { successions: 'successions.json', oversize: 'oversize.json', retireLog: 'retire-log.jsonl', probes: 'probes.json', pending: 'pending.json' };
+export const FILES = { successions: 'successions.json', oversize: 'oversize.json', retireLog: 'retire-log.jsonl', probes: 'probes.json', pending: 'pending.json', identity: 'identity.json' };
 export const DELIVER_MS = 60000;
 
 export const statePath = (d, name) => path.join(d.state, FILES[name]);
+// Ouroboros' own chat, the sender of its peer messages: the one session no duty may archive.
+export const identityId = (d) => { if (!d?.state) return null; const id = readJson(path.join(d.state, FILES.identity), {}).session_id; return typeof id === 'string' ? id : null; };
 export const sessionsRoot = (d) => path.join(d.copilotHome, 'session-state');
 
 export function readJson(file, fallback) {
