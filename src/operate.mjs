@@ -13,6 +13,7 @@ import { restoreHistory } from './compress.mjs';
 import { readOversize } from './size-watch.mjs';
 import { addProbe, logArchive, readPending, readProbes, removeProbe } from './store.mjs';
 import { archive } from './socket.mjs';
+import { sendAsPeer } from './peer.mjs';
 import { rows } from './rows.mjs';
 
 const REQUEST_WAIT_MS = 30000;
@@ -185,11 +186,24 @@ const deliveryResult = (row, sent) => compact({
   message_id: str(sent.frame?.message_id), error: sent.error,
 });
 
+export const RELAYED_LABEL = '[Relayed by Ouroboros at the owner\'s request]';
+
+// A message to a session, from Ouroboros as a peer (the session sees Ouroboros' own chat as the sender). With asUser it goes in
+// as the owner's own prompt instead, which only a message the owner asked Ouroboros to relay may do, and it says so.
+async function tell(d, id, message, mode, asUser) {
+  if (asUser) return deliver(d, id, `${RELAYED_LABEL}\n${message}`, mode);
+  const sent = await sendAsPeer(d, id, message, mode, { rows, create, deliver });
+  return { ok: sent.ok, frame: { type: 'peer_message_sent' }, error: sent.error, peer: sent };
+}
+
 export async function send(d, args) {
   const message = typeof args.message === 'string' ? args.message : '';
   if (!message.trim()) throw new ShepherdError({ code: 'no-message', problem: 'the message is empty', fix: 'pass --message <text>' });
   const row = await resolve(d, args.session_id);
-  return deliveryResult(row, await deliver(d, row.id, message, args.delivery_mode === 'enqueue' ? 'enqueue' : 'immediate'));
+  const sent = await tell(d, row.id, message, args.delivery_mode === 'enqueue' ? 'enqueue' : 'immediate', args.as_user === true);
+  return sent.peer
+    ? compact({ ok: sent.ok, status: sent.ok ? 'sent' : 'failed', session_id: row.id, name: row.name, from: sent.peer.from, from_session_id: sent.peer.from_session_id, message: sent.peer.message, error: sent.error })
+    : deliveryResult(row, sent);
 }
 
 // The project a create request names: its id, or its name, as the app lists it.
@@ -240,7 +254,7 @@ export async function create(d, args) {
   if (chat && name) await ask(d, { type: 'rename_session', session_id: id, title: name }, (reply) => (reply.type === 'session_title_updated' && reply.session_id === id ? 'ok' : 'ignore'), REQUEST_WAIT_MS);
   const mode = str(kickoff.mode);
   if (mode && mode !== 'interactive') await ask(d, { type: 'set_session_mode', session_id: id, mode }, (reply) => (reply.type === 'session_mode_result' && reply.session_id === id ? 'ok' : 'ignore'), REQUEST_WAIT_MS);
-  const sent = prompt ? await deliver(d, id, prompt, 'immediate') : null;
+  const sent = prompt ? await tell(d, id, prompt, 'immediate', args.as_user === true) : null;
   const error = sent && !sent.ok ? `created, but the first message was not accepted: ${sent.error}` : null;
   return compact({ ok: error === null, created: true, session_id: id, app_url: appUrl(id), kind: chat ? 'chat' : 'session', workspace_id: str(created.frame?.workspace_id), coordination: COORDINATION_NOTE, error });
 }
@@ -267,7 +281,7 @@ export async function plan(d, args) {
   const responded = await ask(d, { type: 'respond_to_exit_plan_mode', session_id: row.id, request_id: request.requestId, approved, ...(str(args.selected_action) ? { selected_action: str(args.selected_action) } : {}) },
     (reply) => (reply.request_id === request.requestId ? (reply.type === 'exit_plan_mode_resolved' ? 'ok' : reply.type === 'exit_plan_mode_response_failed' ? 'fail' : 'ignore') : 'ignore'), ANSWER_WAIT_MS);
   const feedback = str(args.feedback);
-  const told = responded.ok && feedback ? await deliver(d, row.id, feedback, 'immediate') : null;
+  const told = responded.ok && feedback ? await tell(d, row.id, feedback, 'immediate', args.as_user === true) : null;
   return compact({ ok: responded.ok, approved, session_id: row.id, feedback_sent: told ? told.ok : undefined, error: responded.error });
 }
 

@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { deps } from '../src/index.mjs';
-import { answer, archiveSession, automation, automationOf, create, findSession, messages, plan, runWorkflow, send, session, sessions, show, workflows } from '../src/operate.mjs';
+import { answer, archiveSession, automation, automationOf, create, findSession, messages, plan, RELAYED_LABEL, runWorkflow, send, session, sessions, show, workflows } from '../src/operate.mjs';
 import { writePending } from '../src/store.mjs';
 import { startFakeApp } from './fake-app.mjs';
 import { CHAT_SESSION, WORKSPACE_SESSION, copilotReplies } from './fake-copilot.mjs';
@@ -146,13 +146,13 @@ test('messages says a missing history is missing, and clamps the count to 1..50'
 test('send delivers immediately by default, queues when asked, and reports a refusal', async () => {
   await withCopilot({ workspaces: sidebar(), refuse: [IDLE] }, async ({ d, app, home }) => {
     histories(d, home);
-    const ok = await send(d, { session_id: WORKING, message: 'carry on' });
+    const ok = await send(d, { session_id: WORKING, message: 'carry on', as_user: true });
     assert.deepEqual(ok, { ok: true, status: 'accepted', session_id: WORKING, name: 'Lane w-work', message_id: 'msg-1' });
     assert.equal(app.received.at(-1).delivery_mode, 'immediate');
-    const queued = await send(d, { session_id: WORKING, message: 'after', delivery_mode: 'enqueue' });
+    const queued = await send(d, { session_id: WORKING, message: 'after', delivery_mode: 'enqueue', as_user: true });
     assert.equal(queued.ok, true);
     assert.equal(app.received.at(-1).delivery_mode, 'enqueue');
-    const refused = await send(d, { session_id: IDLE, message: 'hi' });
+    const refused = await send(d, { session_id: IDLE, message: 'hi', as_user: true });
     assert.equal(refused.ok, false);
     assert.equal(refused.status, 'failed');
     assert.equal(refused.error, `${IDLE} is archived`);
@@ -163,7 +163,7 @@ test('send delivers immediately by default, queues when asked, and reports a ref
 test('a message the app began to deliver but did not confirm is not called lost', async () => {
   await withCopilot({ workspaces: sidebar(), reply: (m) => (m.type === 'send_message' ? [{ type: 'session_dispatch_state', request_id: m.request_id, session_id: m.session_id, dispatch_may_have_started: true }] : null) }, async ({ d, home }) => {
     histories(d, home);
-    const r = await send(d, { session_id: WORKING, message: 'carry on' });
+    const r = await send(d, { session_id: WORKING, message: 'carry on', as_user: true });
     assert.equal(r.ok, false);
     assert.match(r.error, /began delivering the message but had not confirmed it in time; read the session before sending it again/);
   });
@@ -171,7 +171,7 @@ test('a message the app began to deliver but did not confirm is not called lost'
 
 test('create makes a chat, names it, sets its mode and sends the first message, and records it as this agent\'s', async () => {
   await withCopilot({ workspaces: sidebar() }, async ({ d, app, state }) => {
-    const r = await create(d, { name: 'Notes', session_kind: 'chat', kickoff: { prompt: 'Start here', mode: 'plan' } });
+    const r = await create(d, { name: 'Notes', session_kind: 'chat', as_user: true, kickoff: { prompt: 'Start here', mode: 'plan' } });
     assert.equal(r.ok, true);
     assert.equal(r.session_id, CHAT_SESSION);
     assert.equal(r.kind, 'chat');
@@ -180,7 +180,7 @@ test('create makes a chat, names it, sets its mode and sends the first message, 
     const types = app.received.map((m) => m.type);
     assert.deepEqual(types.filter((t) => ['create_session', 'rename_session', 'set_session_mode', 'send_message'].includes(t)), ['create_session', 'rename_session', 'set_session_mode', 'send_message']);
     assert.equal(app.received.find((m) => m.type === 'set_session_mode').mode, 'plan');
-    assert.equal(app.received.find((m) => m.type === 'send_message').prompt, 'Start here');
+    assert.equal(app.received.find((m) => m.type === 'send_message').prompt, `${RELAYED_LABEL}\nStart here`);
     const probes = JSON.parse(fs.readFileSync(path.join(state, 'probes.json'), 'utf8'));
     assert.equal(probes[CHAT_SESSION].name, 'Notes');
   });
@@ -189,7 +189,7 @@ test('create makes a chat, names it, sets its mode and sends the first message, 
 test('create makes a project session in a worktree, finding the project by name, and opens its session', async () => {
   const projects = [{ id: 'proj-1', name: 'Shepherd' }];
   await withCopilot({ workspaces: sidebar(), projects }, async ({ d, app }) => {
-    const r = await create(d, { project_id: 'Shepherd', name: 'Lane', workspace_type: 'worktree', kickoff: { prompt: 'Go', permission_mode: 'allow-all' } });
+    const r = await create(d, { project_id: 'Shepherd', name: 'Lane', workspace_type: 'worktree', as_user: true, kickoff: { prompt: 'Go', permission_mode: 'allow-all' } });
     assert.equal(r.ok, true, r.error);
     assert.equal(r.session_id, WORKSPACE_SESSION);
     assert.equal(r.kind, 'session');
@@ -229,13 +229,13 @@ test('plan approves or rejects a plan the tracker heard, then sends its feedback
     histories(d, home);
     await assert.rejects(plan(d, { session_id: PLANNING, approved: true }), (e) => e.code === 'not-waiting');
     writePending(d, { [PLANNING]: { kind: 'plan', requestId: 'pl1', summary: 'Do it', actions: ['go'], at: new Date().toISOString() } });
-    const r = await plan(d, { session_id: PLANNING, approved: false, selected_action: 'go', feedback: 'Smaller please' });
+    const r = await plan(d, { session_id: PLANNING, approved: false, selected_action: 'go', feedback: 'Smaller please', as_user: true });
     assert.deepEqual(r, { ok: true, approved: false, session_id: PLANNING, feedback_sent: true });
     const responded = app.received.find((m) => m.type === 'respond_to_exit_plan_mode');
     assert.equal(responded.request_id, 'pl1');
     assert.equal(responded.approved, false);
     assert.equal(responded.selected_action, 'go');
-    assert.equal(app.received.find((m) => m.type === 'send_message' && m.prompt === 'Smaller please').session_id, PLANNING);
+    assert.equal(app.received.find((m) => m.type === 'send_message' && m.prompt.endsWith('Smaller please')).session_id, PLANNING);
   });
 });
 
