@@ -7,3 +7,4 @@ Shepherd keeps the GitHub Copilot app's sessions, as work: the one library and C
 - Tests run against fakes: `test/fake-app.mjs` is a pretend socket, and sessions are in-memory. Nothing touches a real app, a real Mac or a real account.
 - No machine names, account names or internal project names in code, tests, commits or PR text.
 - Run `npm test`. CI also syntax-checks every `.mjs` file.
+- **The CLI follows [Ouro AX](https://github.com/ourostack/ouro-ui#ouro-ax).** The kit is vendored in `lib/ouro-ui` and pinned by `upstream-sources.lock.json`; never edit it by hand, copy the next Ouro UI tag instead. Teach the surface, not a doc.
