@@ -31,7 +31,7 @@ flowchart LR
 | Send a session a message | here now |
 | Archive a session or its workspace | here now |
 | Compress an archived session's history (never a live one; restore-history brings it back) | here now |
-| A safe point before a restart | moving here |
+| A safe point before a restart | Housesitter's restart asks, with Shepherd's `sendTo` and `lastReply` (a restart is the house's to run) |
 | Resume after a restart or crash | here now |
 | The 500 MB resume cap | here now |
 | Size watch and hand-off retirement | here now, off until `retire.json` enables it |
@@ -39,7 +39,7 @@ flowchart LR
 | The six-hour health watch | here now |
 | Billing account and quota | here now |
 | Sidebar tidy | here now |
-| Waiting-prompt notices | moving here |
+| Waiting-prompt notices | moving here, with the agent's switch to the CLI below |
 | Delivering Desk's wakes | here now, off until `wakes.json` enables it |
 
 ## CLI
