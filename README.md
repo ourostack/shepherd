@@ -35,26 +35,29 @@ flowchart LR
 | Resume after a restart or crash | here now |
 | The 500 MB resume cap | here now |
 | Size watch and hand-off retirement | here now, off until `retire.json` enables it |
-| Stuck resume, and the six-hour health watch | here now |
+| Stuck resume | here now, off until `stuck-resume.json` enables it |
+| The six-hour health watch | here now |
 | Billing account and quota | here now |
 | Sidebar tidy | here now |
 | Waiting-prompt notices | moving here |
-| Delivering Desk's wakes | moving here |
+| Delivering Desk's wakes | here now, off until `wakes.json` enables it |
 
 ## CLI
 
 ```sh
-npx github:ourostack/shepherd#v0.6.0 status                # one line per local session
-npx github:ourostack/shepherd#v0.6.0 status --json         # the same as data
-npx github:ourostack/shepherd#v0.6.0 restore-history <id>  # put back an archived session's compressed history
-npx github:ourostack/shepherd#v0.6.0 retire plan          # what retirement and the size watch would archive, flag or ask
-npx github:ourostack/shepherd#v0.6.0 watch --status        # what the health watch is following
-npx github:ourostack/shepherd#v0.6.0 quota                 # each Copilot account's quota, and the balancer's last tick
-npx github:ourostack/shepherd#v0.6.0 sidebar               # which projects the sidebar shows, and what apply would change
-npx github:ourostack/shepherd#v0.6.0 help
+npx github:ourostack/shepherd#v0.7.0 status                # one line per local session
+npx github:ourostack/shepherd#v0.7.0 status --json         # the same as data
+npx github:ourostack/shepherd#v0.7.0 restore-history <id>  # put back an archived session's compressed history
+npx github:ourostack/shepherd#v0.7.0 retire plan          # what retirement and the size watch would archive, flag or ask
+npx github:ourostack/shepherd#v0.7.0 watch --status        # what the health watch is following
+npx github:ourostack/shepherd#v0.7.0 quota                 # each Copilot account's quota, and the balancer's last tick
+npx github:ourostack/shepherd#v0.7.0 sidebar               # which projects the sidebar shows, and what apply would change
+npx github:ourostack/shepherd#v0.7.0 wakes                 # each wake runner's last run and the wakes it delivered
+npx github:ourostack/shepherd#v0.7.0 stuck                 # which stopped sessions a stuck resume would resume
+npx github:ourostack/shepherd#v0.7.0 help
 ```
 
-Read-only except `restore-history`, `watch`, `install`, an applied quota tick, `sidebar apply` and `retire apply` (their own state, log and waiting files, the app's sidebar, and the archive log). `quota read`, `quota plan`, `quota status`, `sidebar` (plan) and `retire plan` change nothing. Exit codes: 0 ok, 1 the app's data could not be read, the history could not be restored, the agent could not load, or the app refused a sidebar change, 2 usage.
+Read-only except `restore-history`, `watch`, `install`, an applied quota tick, `sidebar apply`, `retire apply` and `wakes poll` (their own state, log and waiting files, the app's sidebar, the archive log, and, for `wakes poll`, the wakes it sends only when `wakes.json` enables them). `quota read`, `quota plan`, `quota status`, `sidebar` (plan), `retire plan`, `wakes` (status) and `stuck` (plan) change nothing. Exit codes: 0 ok, 1 the app's data could not be read, the history could not be restored, the agent could not load, or the app refused a sidebar change, 2 usage.
 
 ## Run it always
 
@@ -62,7 +65,7 @@ Read-only except `restore-history`, `watch`, `install`, an applied quota tick, `
 
 The health watch follows each session that a resume sent a message to, for six hours. It asks a silent, erroring or stuck session once more, and tells the agent by name only about a session that stays broken.
 
-The same pass then runs the retire duties, once `~/.config/shepherd/retire.json` says `"enabled": true` (see Retirement). With no file it does nothing, so it never runs alongside Ouroboros' copy while that still runs.
+The same pass then runs the retire duties, once `~/.config/shepherd/retire.json` says `"enabled": true` (see Retirement). With no file it does nothing, so it never runs alongside Ouroboros' copy while that still runs. The wake runners and the stuck resume follow the same rule: each does nothing until its own config enables it (see Wakes and Stuck resume).
 
 ## Sidebar tidy
 
@@ -94,6 +97,41 @@ The sidebar should show live jobs only. Two kinds of session leave it, through t
 Neither goes while it runs, waits on a person, is stuck, or while a session it coordinates still works. The **size watch** covers histories over the 500 MB resume cap: it flags them never-resume, asks the coordinator (and the session itself while it runs) to hand off, asks again each time one grows by half, and archives one that sits idle 30 minutes after its last ask (at once under memory pressure). A session that is not running and has no smaller coordinator is never messaged, because that would reload it; the owner is told through the agent instead.
 
 `shepherd retire plan` says what would happen and changes nothing. `shepherd retire apply` does it, and refuses unless the config enables it. The config is `~/.config/shepherd/retire.json` (`SHEPHERD_RETIRE_CONFIG` overrides the path): `{ "enabled": true }`.
+
+## Wakes
+
+A wake is a message for a Copilot app session, sent because something outside the app is due: a new issue, a schedule, a relay. A wake runner is a command the watch runs on a cadence. The command decides what is worth a wake and prints one JSON value:
+
+```json
+{
+  "wakes": [{ "session": "<session id>", "message": "New issue in example/project: fix the build", "done": ["/Users/you/bin/issue-poll", "ack", "42"], "replaces": "New issue in example/project:" }],
+  "status": ["polled just now, 3 open"]
+}
+```
+
+Write `~/.config/shepherd/wakes.json`:
+
+```json
+{
+  "enabled": true,
+  "runners": [
+    { "name": "issues", "command": ["/Users/you/bin/issue-poll", "poll"], "everySeconds": 300, "session": "<session id>" }
+  ]
+}
+```
+
+- `enabled`: only `true` turns delivery on. With no file, or `false`, the duty does nothing.
+- `runners[].command`: a program and its arguments, run with no shell. It has two minutes to print its JSON.
+- `everySeconds` (default 300, 10 or more): how often it runs. The watch passes every 60 seconds, so a runner runs on the first pass at or after its time.
+- `session` (optional): receives a wake that names none. `delivery` (optional): `immediate` (the default, admitted at the session's next turn boundary) or `enqueue` (held until the session's current run ends).
+- A wake's `done` runs after its send, with `--error <reason>` added when the send failed, so the command can keep the wake pending. `replaces` takes back the session's queued user messages that start with that prefix before the wake goes out.
+- A session gets one wake at a time: while the last one has not reached its log, the next is held and offered again on the next run. A wake still missing after 30 minutes is taken as lost.
+
+`SHEPHERD_WAKES_CONFIG` overrides the file. `shepherd wakes` shows each runner's last run, wakes delivered and open wakes. `shepherd wakes poll` runs each command now: it sends the wakes only when the config enables them, and otherwise shows what it would send.
+
+## Stuck resume
+
+A session whose agent loop stopped (not running, its last turn called tools and no next turn started) is sent one message to carry on, once per stop and at most three times a day. Sessions left alone: idle for over a day, a history over 500 MB (the app loads all of it on resume), remote, or waiting on a person. It does nothing until `~/.config/shepherd/stuck-resume.json` says `{ "enabled": true }` (`SHEPHERD_STUCK_RESUME_CONFIG` overrides the file). `shepherd stuck` lists the stopped sessions and what a resume would do, and changes nothing.
 
 ## Quota balancing
 
@@ -143,6 +181,7 @@ await archive(d, { ...sessions[0], workspaceType: "worktree" }, { keepWorktree: 
 - `ShepherdError` carries `code`, `problem` and `fix`; its message reads `<problem>. Fix: <fix>.`
 - `quotaConfig(file?)`, `quotaRead(deps, cfg?)`, `quotaTick(deps, { apply, only, cfg, now })`, `quotaStatus()` and `listenQuota(deps, { log, file, retryMs })`: the quota balancer (see Quota balancing). A tick with `apply` does nothing unless the config says `"enabled": true`.
 - `sidebarConfig(file?)`, `sidebarPlan(projects, sessions, { homes })` (pure) and `sidebarTidy(deps, { homes, apply })`: the sidebar tidy (see Sidebar tidy). `sidebarTidy` reads the database and, with `apply`, sends the app only the show or hide requests that change a project.
+- `wakesConfig(file?)` reads `wakes.json` (`SHEPHERD_WAKES_CONFIG`). `runDueWakes(deps, runners, due)` runs the runners that are due and delivers their wakes; `planWakes(runners)` shows what they would send without sending; `wakeStatusLines(runners, states, now)` renders their states. `stuckResumeConfig(file?)` reads `stuck-resume.json`; `stuckPlan(rows, deps)` plans and `resumeStuck(rows, deps)` resumes (see Wakes and Stuck resume).
 
 Types ship in `src/index.d.ts`.
 

@@ -159,7 +159,7 @@ export function snapshot(deps: Deps, now?: number, skip?: string[]): Promise<Sna
 
 export function exchange(copilotHome: string, messages: object[], opts?: { done?: (j: any, got: any[]) => boolean; keep?: (j: any) => boolean; waitMs?: number }): Promise<any[]>;
 export function appReady(deps: Deps): Promise<boolean>;
-export function sendTo(deps: Deps, id: string, prompt: string, waitMs?: number): Promise<{ ok: boolean; reply: string; error: string | null }>;
+export function sendTo(deps: Deps, id: string, prompt: string, waitMs?: number, delivery?: 'immediate' | 'enqueue'): Promise<{ ok: boolean; reply: string; error: string | null }>;
 /** Once the app confirms, compresses the session's history (unless compress is false); compressed is null otherwise. */
 export function archive(deps: Deps, row: ArchiveRow, opts?: { keepWorktree?: boolean; waitMs?: number; compress?: boolean }): Promise<{ ok: boolean; session_id: string; error: string | null; compressed: CompressResult | null }>;
 export function compressHistory(deps: Deps, id: string, opts?: { dryRun?: boolean }): Promise<CompressResult>;
@@ -300,3 +300,41 @@ export function watchRetire(deps: Deps, opts?: { apply?: boolean }): Promise<Ret
 /** Flags over-limit histories, asks for hand-offs, and archives idle giants. */
 export function noticeOversizedSessions(listed: AppSessionRow[], deps: Deps, opts?: { apply?: boolean }): Promise<{ nudged: number; archived: number; actions: RetireAction[] }>;
 export function whereItLeftOff(row: { id: string; branch?: string | null; projectRepo?: string | null }, deps: Deps): string;
+
+/** One wake runner from wakes.json: its command runs every everySeconds, and its wakes go to session (or to the one it names). */
+export interface WakeRunner {
+  name: string;
+  command: string[];
+  everySeconds: number;
+  delivery: 'immediate' | 'enqueue';
+  session?: string;
+}
+
+export interface WakeState {
+  lastRunAt?: string;
+  lastWakes?: number;
+  lastDelivered?: number;
+  lastError?: string;
+  status?: string[];
+  /** By session: the last wake sent that has not reached the session yet. */
+  open?: Record<string, { at: string; message: string }>;
+}
+
+/** The wake runners from wakes.json (SHEPHERD_WAKES_CONFIG overrides the path). No file: { enabled: false, runners: [] }. */
+export function wakesConfig(file?: string): { enabled: boolean; runners: WakeRunner[] };
+export function wakesFile(env?: Record<string, string | undefined>, home?: string): string;
+export function runWakeRunners(stateDir: string, runners: WakeRunner[], runnerDeps: object, only?: Set<string>): Promise<Record<string, WakeState>>;
+export function runnerDeps(deps: Deps, now: number): object;
+/** Runs the runners that are due (each at its own everySeconds); due remembers the next run between passes. Returns the states of those that ran. */
+export function runDueWakes(deps: Deps, runners: WakeRunner[], due: Map<string, number>, now?: number): Promise<Record<string, WakeState>>;
+export function planWakes(runners: WakeRunner[]): Promise<{ name: string; error: string | null; status: string[]; wakes: { session: string | null; message: string; replaces: string | null }[] }[]>;
+export function readWakeStates(stateDir: string): Record<string, WakeState>;
+export function wakeStatusLines(runners: WakeRunner[], states: Record<string, WakeState>, now: number): string[];
+
+export function stuckResumeFile(env?: Record<string, string | undefined>, home?: string): string;
+/** The stuck-resume config from stuck-resume.json (SHEPHERD_STUCK_RESUME_CONFIG overrides the path). No file: { enabled: false }. */
+export function stuckResumeConfig(file?: string): { enabled: boolean };
+/** Every stuck session with what a resume would do now. Changes nothing. */
+export function stuckPlan(listed: AppSessionRow[], deps: Deps, now?: number): { id: string; name: string; resume: boolean; why: string }[];
+/** Sends one resume message to each stuck session whose loop stopped since it was last resumed. Returns how many the app took. */
+export function resumeStuck(listed: AppSessionRow[], deps: Deps, now?: number, opts?: { send?: (id: string, text: string) => Promise<{ ok: boolean; error: string | null }> }): Promise<number>;

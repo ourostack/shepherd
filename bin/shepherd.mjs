@@ -2,16 +2,18 @@
 // `shepherd status [--json]` reads the app's sessions; `shepherd restore-history <id>` puts back a compressed history;
 // `shepherd watch` is one pass of the health watch (--every keeps it resident, with the quota balancer; --status shows it);
 // `shepherd quota` reads and plans the Copilot quota balancer (status shows its last tick); `shepherd sidebar` plans or applies
-// the sidebar tidy; `shepherd retire` plans, or applies, the hand-off retirement and the size watch; `shepherd install` loads the
-// launch agent that keeps `watch --every 60` running; `shepherd help`. Only restore-history writes inside a session's history
-// folder; watch, quota, sidebar apply and retire apply write their own state folders; sidebar apply asks the app to show or hide
-// projects; install writes the launch agent (--dry-run writes nothing). Plans change nothing.
+// the sidebar tidy; `shepherd retire` plans, or applies, the hand-off retirement and the size watch; `shepherd wakes` shows, or
+// polls, the wake runners; `shepherd stuck` plans the stuck resume; `shepherd install` loads the launch agent that keeps
+// `watch --every 60` running; `shepherd help`. Only restore-history writes inside a session's history folder; watch, quota,
+// sidebar apply, retire apply and wakes poll write their own state folders; sidebar apply asks the app to show or hide
+// projects; wakes poll sends wakes only when wakes.json enables them; install writes the launch agent (--dry-run writes
+// nothing). Plans change nothing.
 // Exit codes: 0 ok, 1 the app's data could not be read, a history could not be restored, the agent could not load, or the app
 // refused a sidebar change, 2 usage.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ShepherdError, deps, quotaConfig, quotaRead, quotaStatus, quotaTick, restoreHistory, sidebarConfig, sidebarFile, sidebarTidy, renderSidebar, snapshot, stateDir } from '../src/index.mjs';
+import { ShepherdError, deps, planWakes, quotaConfig, quotaRead, quotaStatus, quotaTick, readWakeStates, rows, restoreHistory, runWakeRunners, runnerDeps, sidebarConfig, sidebarFile, sidebarTidy, renderSidebar, snapshot, stateDir, stuckPlan, stuckResumeConfig, stuckResumeFile, wakeStatusLines, wakesConfig, wakesFile } from '../src/index.mjs';
 import { renderRetire, retireConfig, retireDeps, retireFile, watchRetire } from '../src/retire.mjs';
 import { counts, healthDeps, pass, readWatch, renderWatch } from '../src/health-watch.mjs';
 import { install } from '../src/install.mjs';
@@ -24,7 +26,8 @@ const USAGE = `shepherd: keeps the flock: the GitHub Copilot app's sessions, as 
   shepherd restore-history <id> [--json]           put back an archived session's compressed history
   shepherd watch [--quiet] [--json]                one pass of the health watch over the resumed sessions, then exit
   shepherd watch --every <seconds> [--quiet]       stay resident: each pass runs the health watch, then the quota balancer,
-                                                   then the sidebar tidy (at most every everyMinutes)
+                                                   then the sidebar tidy (at most every everyMinutes), then the retire, wake
+                                                   and stuck-resume duties (each only when its config enables it)
   shepherd watch --status [--json]                 what the health watch is following: healthy, waiting, asked again, broken
   shepherd quota [read|plan|status] [--json]       each account's premium-request quota; plan: what a tick would do now;
                                                    status: the last tick (default)
@@ -32,6 +35,12 @@ const USAGE = `shepherd: keeps the flock: the GitHub Copilot app's sessions, as 
                                                    nothing (default); apply needs sidebar.json to say "enabled": true
   shepherd retire [plan|apply] [--json]            hand-off retirement and the size watch: plan (default) changes nothing;
                                                    apply archives, flags and asks, and only when retire.json enables it
+  shepherd wakes [status|poll] [--json]            each wake runner's last run, wakes delivered, open wakes and status lines
+                                                   (status, the default); poll runs each command now and sends its wakes only
+                                                   when wakes.json says "enabled": true, otherwise it sends nothing
+  shepherd stuck [plan] [--json]                   sessions whose loop stopped, and what a stuck resume would do (plan, the
+                                                   default, changes nothing); the watch resumes them only when stuck-resume.json
+                                                   says "enabled": true
   shepherd install [--dry-run]                     load the launch agent that runs "watch --every 60 --quiet" (--dry-run prints it)
   shepherd version [--json]                        the installed version (also --version)
   shepherd help                                    this text
@@ -46,12 +55,16 @@ const FLAGS = {
   quota: ['json', 'copilot-home', 'id'],
   sidebar: ['json', 'copilot-home', 'id'],
   retire: ['json', 'copilot-home', 'id'],
+  wakes: ['json', 'copilot-home', 'id'],
+  stuck: ['json', 'copilot-home', 'id'],
   install: ['dry-run'],
 };
 
 const QUOTA_SUBS = ['read', 'plan', 'status'];
 const SIDEBAR_SUBS = ['plan', 'apply'];
 const RETIRE_SUBS = ['plan', 'apply'];
+const WAKES_SUBS = ['status', 'poll'];
+const STUCK_SUBS = ['plan'];
 
 const usage = (problem, fix) => {
   process.stderr.write(`shepherd: usage: ${problem}. Fix: ${fix}.\n`);
@@ -84,6 +97,8 @@ function parse(argv) {
   if (verb === 'quota' && opts.id !== null && !QUOTA_SUBS.includes(opts.id)) return { error: [`quota takes read, plan or status, not "${opts.id}"`, 'shepherd quota status'] };
   if (verb === 'sidebar' && opts.id !== null && !SIDEBAR_SUBS.includes(opts.id)) return { error: [`sidebar takes plan or apply, not "${opts.id}"`, 'shepherd sidebar plan'] };
   if (verb === 'retire' && opts.id !== null && !RETIRE_SUBS.includes(opts.id)) return { error: [`retire takes plan or apply, not "${opts.id}"`, 'shepherd retire plan'] };
+  if (verb === 'wakes' && opts.id !== null && !WAKES_SUBS.includes(opts.id)) return { error: [`wakes takes status or poll, not "${opts.id}"`, 'shepherd wakes status'] };
+  if (verb === 'stuck' && opts.id !== null && !STUCK_SUBS.includes(opts.id)) return { error: [`stuck takes plan, not "${opts.id}"`, 'shepherd stuck plan'] };
   if (verb === 'watch' && opts.every !== null && opts.status) return { error: ['--every and --status cannot be used together', 'shepherd watch --status'] };
   return { verb, opts };
 }
@@ -174,6 +189,39 @@ async function retire({ id, json, copilotHome }) {
   if (r.errors.length) process.exitCode = 1;
 }
 
+async function wakes({ id = 'status', json, copilotHome }) {
+  const file = wakesFile();
+  const cfg = wakesConfig(file);
+  const d = deps({ copilotHome });
+  const now = d.now();
+  if (id === 'poll' && !cfg.enabled) {
+    const plans = await planWakes(cfg.runners);
+    if (json) { process.stdout.write(`${JSON.stringify({ enabled: false, file, plans })}\n`); return; }
+    process.stdout.write(`wakes are off (${file} does not say "enabled": true): nothing was sent\n`);
+    for (const p of plans) {
+      if (p.error) process.stdout.write(`wake runner ${p.name}: ${p.error}\n`);
+      else process.stdout.write(`wake runner ${p.name}: would send ${p.wakes.length} wake(s)\n${p.wakes.map((w) => `  ${w.session ?? 'no session'}: ${w.message.slice(0, 80)}`).join('\n')}${p.wakes.length ? '\n' : ''}`);
+    }
+    return;
+  }
+  const states = id === 'poll' ? await runWakeRunners(d.state, cfg.runners, runnerDeps(d, now)) : readWakeStates(d.state);
+  if (json) { process.stdout.write(`${JSON.stringify({ enabled: cfg.enabled, file, runners: cfg.runners.map((r) => ({ name: r.name, state: states[r.name] ?? null })) })}\n`); return; }
+  if (!cfg.enabled) process.stdout.write(`wakes are off: ${file} does not say "enabled": true\n`);
+  if (!cfg.runners.length) process.stdout.write(`no wake runners in ${file}\n`);
+  for (const line of wakeStatusLines(cfg.runners, states, now)) process.stdout.write(`${line}\n`);
+}
+
+async function stuck({ json, copilotHome }) {
+  const file = stuckResumeFile();
+  const enabled = stuckResumeConfig(file).enabled;
+  const d = deps({ copilotHome });
+  const sessions = stuckPlan(await rows(d), d);
+  if (json) { process.stdout.write(`${JSON.stringify({ enabled, file, sessions })}\n`); return; }
+  if (!enabled) process.stdout.write(`stuck resume is off: ${file} does not say "enabled": true\n`);
+  if (!sessions.length) process.stdout.write('no stuck sessions\n');
+  for (const s of sessions) process.stdout.write(`${s.resume ? 'would resume' : 'would leave'}  ${s.id.slice(0, 8)}  ${s.name}  (${s.why})\n`);
+}
+
 async function installAgent({ dryRun }) {
   const r = await install({ dry: dryRun });
   if (dryRun) { process.stdout.write(r.text); return; }
@@ -200,6 +248,8 @@ else {
     else if (parsed.verb === 'quota') await quota(parsed.opts);
     else if (parsed.verb === 'sidebar') await sidebar(parsed.opts);
     else if (parsed.verb === 'retire') await retire(parsed.opts);
+    else if (parsed.verb === 'wakes') await wakes(parsed.opts);
+    else if (parsed.verb === 'stuck') await stuck(parsed.opts);
     else await restore(parsed.opts);
   } catch (e) {
     if (e instanceof ShepherdError) process.stderr.write(`shepherd: ${e.code}: ${e.message}\n`);

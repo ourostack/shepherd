@@ -44,12 +44,13 @@ export function exchange(copilotHome, messages, { done = () => false, waitMs = 1
 export const appReady = async (deps) => (await deps.exchange([], { done: (j) => j.type === 'server_hello', keep: (j) => j.type === 'server_hello', waitMs: 3000 })).some((j) => j.type === 'server_hello');
 
 // Send a prompt to a session; ok when the app queued or sent it. A session whose history was compressed gets it back first.
-export async function sendTo(deps, id, prompt, waitMs) {
+// delivery is 'immediate' (the app admits it at the session's next turn boundary) or 'enqueue' (after the current run ends).
+export async function sendTo(deps, id, prompt, waitMs, delivery = 'immediate') {
   // Best effort: a session restored after its history was compressed gets it back before it resumes. A restore that
   // can't run (deps without historyPath, an id that isn't a session id, a failed gunzip) never stops the send.
   if (typeof deps.historyPath === 'function') await restoreHistory(deps, id);
   const request_id = randomUUID();
-  const got = await deps.exchange([{ type: 'send_message', session_id: id, prompt, delivery_mode: 'immediate', request_id }], {
+  const got = await deps.exchange([{ type: 'send_message', session_id: id, prompt, delivery_mode: delivery, request_id }], {
     keep: (j) => j.request_id === request_id || (j.session_id === id && /message_(sent|queued|delivery)/.test(j.type)) || j.type === 'socket_error',
     done: (j) => /^(session_message_sent|session_message_queued|session_message_delivery_unknown|error|socket_error)$/.test(j.type),
     // A session whose runtime is not loaded loads first, often for more than 20 s; closing early cancels the send.
