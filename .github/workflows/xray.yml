@@ -1,0 +1,72 @@
+name: Ouro AX X-ray
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  xray:
+    name: Ouro AX X-ray
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22.18"
+      # The CLI runs against a pretend app (scripts/xray-fixture.mjs: a temporary home and a socket on loopback), never a real one.
+      # The guard proves the home is temporary and the socket is the pretend one before anything the CLI does is trusted.
+      - name: Ouro AX X-ray
+        env:
+          XRAY_HOME: ${{ runner.temp }}/xray-home
+        run: |
+          mkdir -p xray "$XRAY_HOME"
+          node scripts/xray-fixture.mjs "$XRAY_HOME" > "$RUNNER_TEMP/fixture.log" 2>&1 &
+          FIXTURE=$!
+          for _ in $(seq 50); do grep -q ready "$RUNNER_TEMP/fixture.log" && break; sleep 0.2; done
+          PORT=$(node -p "JSON.parse(require('fs').readFileSync('$XRAY_HOME/.shepherd-xray-fixture','utf8')).port")
+          node scripts/inventory.mjs > inventory.json
+          node lib/ouro-ui/registry/ouro/ax/xray.ts --cli "node bin/shepherd.mjs" --inventory inventory.json \
+            --home "$XRAY_HOME" --env "SHEPHERD_XRAY_APP=http://127.0.0.1:$PORT" --env "RUNNER_TEMP=$RUNNER_TEMP" \
+            --guard "node scripts/assert-mock.mjs" --state "help --json" --commit "$GITHUB_SHA" \
+            --json --md xray/xray.md > xray/report.json || true
+          kill $FIXTURE
+      # Ouroboros calls the agent verbs with no --why and the id inside --input, so four must claims (others-need-why,
+      # others-preview, wrong-ref-first, wait-on-refs) cannot hold without breaking it. The gate holds the rest from slipping.
+      - name: Gate on the must claims
+        if: always()
+        run: |
+          node -e '
+            const r = JSON.parse(require("fs").readFileSync("xray/report.json", "utf8"));
+            const { must, mustHolding } = r.summary;
+            const floor = 10;
+            if (!(must > 0) || mustHolding < floor) {
+              console.error(`must claims holding: ${mustHolding} of ${must}; at least ${floor} have to hold`);
+              process.exit(1);
+            }
+            console.log(`must claims holding: ${mustHolding} of ${must}`);
+          '
+      - name: Action claims
+        if: always()
+        run: |
+          mkdir -p xray-actions
+          node tools/ouro-actions/ouro-actions.mts check actions/shepherd.actions.mts actions/generated \
+            --report xray-actions/report.json --app "Shepherd" --commit "$GITHUB_SHA"
+          node -e "const s = require('./xray-actions/report.json').summary; if (!s) process.exit(1); if (s.mustHolding !== s.must) { console.error('Action claims: ' + s.mustHolding + ' of ' + s.must + ' must claims hold'); process.exit(1); }"
+      - name: Upload the X-ray
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xray
+          path: xray/
+      - name: Upload the action claims
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: actions-xray
+          path: xray-actions/

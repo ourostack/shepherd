@@ -51,7 +51,7 @@ const takes = (verb, values, got, fix) => {
 const command = (def) => defineCommand({ ...def, run: (input, ctx) => guard(def.name, () => def.run(input, ctx)) });
 const read = { effect: 'private', readOnly: true };
 
-const COMMANDS = [
+export const COMMANDS = [
   command({
     name: 'status', summary: 'each local session: short id, title, busy or idle and why, history size', ...read,
     output: '{ sessions: [{ id, title, mode, state, why, history_mb }] }',
@@ -200,11 +200,12 @@ const COMMANDS = [
     },
   }),
   command({
-    name: 'install', summary: 'load the launch agent that runs "watch --every 60 --quiet" (--dry-run prints it)', effect: 'others', why: 'none',
+    name: 'install', summary: 'load the launch agent that runs "watch --every 60 --quiet" (--dry-run prints it)', effect: 'private',
+    flags: { 'dry-run': { type: 'boolean', description: 'print the launch agent and write nothing' } },
     output: '{ ok, label, plist, log }',
     exit: (r) => (r.ok === false ? 'error' : 'ok'),
     text: (r) => `installed ${r.label}: ${r.plist}; logs in ${r.log}`,
-    plan: async () => outcome({ action: 'install', state: 'planned', effect: 'others', summary: (await install({ dry: true })).text }),
+    plan: async () => outcome({ action: 'install', state: 'planned', effect: 'private', summary: (await install({ dry: true })).text }),
     async run(_input, ctx) {
       if (ctx.json) throw usage('install', 'it loads a launch agent and has no --json', 'shepherd install, or shepherd install --dry-run to see it');
       const r = await install({ dry: false });
@@ -225,7 +226,7 @@ const COMMANDS = [
 export const cli = defineCli({
   name: 'shepherd',
   about: ['keeps the flock: the GitHub Copilot app\'s sessions, as work.', 'The agent verbs (sessions … open) take flags, or one JSON object on stdin with --input -.'],
-  exits: defineExitCodes(BASE_EXIT_CODES.map((e) => (e.name === 'error' ? { ...e, meaning: 'error: the app\'s data could not be read, a history could not be restored, the agent could not load, the app refused a sidebar change, or an agent verb was refused or failed; the message says what to do' } : e))),
+  exits: defineExitCodes(BASE_EXIT_CODES.map((e) => (e.name === 'error' ? { ...e, meaning: 'error: the app\'s data is unreadable, a history did not restore, the agent did not load, the app refused a sidebar change, or an agent verb was refused; the message says what to do' } : e))),
   globalFlags: { 'copilot-home': { type: 'string', placeholder: '<dir>', description: 'the Copilot app\'s data folder (default ~/.copilot)' } },
   commands: COMMANDS,
 });

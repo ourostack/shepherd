@@ -1,0 +1,306 @@
+{
+  "generator": "ouro-actions 0.17.6",
+  "set": "shepherd",
+  "tools": [
+    {
+      "name": "sessions",
+      "description": "List the app's sessions and what each is doing. Read-only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "description": "Keep only the sessions in this state.",
+            "enum": [
+              "busy",
+              "idle",
+              "waiting",
+              "stuck"
+            ]
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "consequentialHint": false
+      }
+    },
+    {
+      "name": "session",
+      "description": "Read one session and the question or plan it waits on, if any. Read-only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The session: its whole id, or the first 8 or more characters of it."
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "consequentialHint": false
+      }
+    },
+    {
+      "name": "messages",
+      "description": "Read the last messages of a session. Read-only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The session: its whole id, or the first 8 or more characters of it."
+          },
+          "count": {
+            "type": "integer",
+            "description": "How many messages. Defaults to 6.",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "consequentialHint": false
+      }
+    },
+    {
+      "name": "workflows",
+      "description": "List the app's workflows. Read-only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "consequentialHint": false
+      }
+    },
+    {
+      "name": "open",
+      "description": "Bring a session to the front of the app's window. Read-only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The session: its whole id, or the first 8 or more characters of it."
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "consequentialHint": false
+      }
+    },
+    {
+      "name": "send",
+      "description": "Send a message to a session, which its owner may read. A person says yes first.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The session: its whole id, or the first 8 or more characters of it."
+          },
+          "message": {
+            "type": "string",
+            "description": "The text to send."
+          },
+          "delivery": {
+            "type": "string",
+            "description": "Now, or behind what the session is doing.",
+            "enum": [
+              "immediate",
+              "enqueue"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "consequentialHint": true
+      }
+    },
+    {
+      "name": "create",
+      "description": "Create a session in the app, which its owner will see. A person says yes first.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "The project, by id or name."
+          },
+          "name": {
+            "type": "string",
+            "description": "The title."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "The first prompt."
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "consequentialHint": true
+      }
+    },
+    {
+      "name": "answer_question",
+      "description": "Answer a question a session asked, as the session's owner would. A person says yes first.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The session: its whole id, or the first 8 or more characters of it."
+          },
+          "answer": {
+            "type": "string",
+            "description": "The answer."
+          }
+        },
+        "required": [
+          "id",
+          "answer"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "consequentialHint": true
+      }
+    },
+    {
+      "name": "plan",
+      "description": "Approve or reject a plan a session offered. A person says yes first.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The session: its whole id, or the first 8 or more characters of it."
+          },
+          "approved": {
+            "type": "boolean",
+            "description": "True to approve, false to reject."
+          },
+          "feedback": {
+            "type": "string",
+            "description": "What to tell the session."
+          }
+        },
+        "required": [
+          "id",
+          "approved"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "consequentialHint": true
+      }
+    },
+    {
+      "name": "archive",
+      "description": "Archive a session. A person says yes first.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The session: its whole id, or the first 8 or more characters of it."
+          },
+          "ownerAsked": {
+            "type": "boolean",
+            "description": "The owner asked for this archive, so a session this agent did not create may go."
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "consequentialHint": true
+      }
+    },
+    {
+      "name": "automation",
+      "description": "Read, replace or clear a session's automation, which sends messages on a schedule. A person says yes first.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The session: its whole id, or the first 8 or more characters of it."
+          },
+          "clear": {
+            "type": "boolean",
+            "description": "Remove the session's automation."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "What the automation sends."
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "consequentialHint": true
+      }
+    },
+    {
+      "name": "run_workflow",
+      "description": "Run one of the app's workflows now. A person says yes first.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The workflow's id, from workflows."
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "consequentialHint": true
+      }
+    }
+  ],
+  "refusals": {}
+}

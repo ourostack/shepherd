@@ -1,0 +1,230 @@
+{
+  "generator": "ouro-actions 0.17.6",
+  "set": "shepherd",
+  "tool": "shepherd",
+  "commands": [
+    {
+      "name": "sessions",
+      "summary": "List the app's sessions and what each is doing. Read-only.",
+      "effect": "private",
+      "readOnly": true,
+      "flags": {
+        "state": {
+          "type": "enum",
+          "description": "Keep only the sessions in this state.",
+          "values": [
+            "busy",
+            "idle",
+            "waiting",
+            "stuck"
+          ]
+        }
+      },
+      "output": "{ ok }"
+    },
+    {
+      "name": "session",
+      "summary": "Read one session and the question or plan it waits on, if any. Read-only.",
+      "effect": "private",
+      "readOnly": true,
+      "args": [
+        {
+          "name": "id",
+          "description": "The session: its whole id, or the first 8 or more characters of it.",
+          "required": true
+        }
+      ],
+      "output": "{ ok }"
+    },
+    {
+      "name": "messages",
+      "summary": "Read the last messages of a session. Read-only.",
+      "effect": "private",
+      "readOnly": true,
+      "args": [
+        {
+          "name": "id",
+          "description": "The session: its whole id, or the first 8 or more characters of it.",
+          "required": true
+        }
+      ],
+      "flags": {
+        "count": {
+          "type": "number",
+          "description": "How many messages. Defaults to 6.",
+          "min": 1
+        }
+      },
+      "output": "{ ok }"
+    },
+    {
+      "name": "workflows",
+      "summary": "List the app's workflows. Read-only.",
+      "effect": "private",
+      "readOnly": true,
+      "output": "{ ok }"
+    },
+    {
+      "name": "open",
+      "summary": "Bring a session to the front of the app's window. Read-only.",
+      "effect": "private",
+      "readOnly": true,
+      "args": [
+        {
+          "name": "id",
+          "description": "The session: its whole id, or the first 8 or more characters of it.",
+          "required": true
+        }
+      ],
+      "output": "{ ok }"
+    },
+    {
+      "name": "send",
+      "summary": "Send a message to a session, which its owner may read. A person says yes first.",
+      "effect": "others",
+      "args": [
+        {
+          "name": "id",
+          "description": "The session: its whole id, or the first 8 or more characters of it.",
+          "required": true
+        }
+      ],
+      "flags": {
+        "message": {
+          "type": "string",
+          "description": "The text to send.",
+          "required": true
+        },
+        "delivery": {
+          "type": "enum",
+          "description": "Now, or behind what the session is doing.",
+          "values": [
+            "immediate",
+            "enqueue"
+          ]
+        }
+      },
+      "output": "{ ok }"
+    },
+    {
+      "name": "create",
+      "summary": "Create a session in the app, which its owner will see. A person says yes first.",
+      "effect": "others",
+      "flags": {
+        "project": {
+          "type": "string",
+          "description": "The project, by id or name."
+        },
+        "name": {
+          "type": "string",
+          "description": "The title."
+        },
+        "prompt": {
+          "type": "string",
+          "description": "The first prompt."
+        }
+      },
+      "output": "{ ok }"
+    },
+    {
+      "name": "answer",
+      "summary": "Answer a question a session asked, as the session's owner would. A person says yes first.",
+      "effect": "others",
+      "args": [
+        {
+          "name": "id",
+          "description": "The session: its whole id, or the first 8 or more characters of it.",
+          "required": true
+        }
+      ],
+      "flags": {
+        "answer": {
+          "type": "string",
+          "description": "The answer.",
+          "required": true
+        }
+      },
+      "output": "{ ok }"
+    },
+    {
+      "name": "plan",
+      "summary": "Approve or reject a plan a session offered. A person says yes first.",
+      "effect": "others",
+      "args": [
+        {
+          "name": "id",
+          "description": "The session: its whole id, or the first 8 or more characters of it.",
+          "required": true
+        }
+      ],
+      "flags": {
+        "approved": {
+          "type": "boolean",
+          "description": "True to approve, false to reject.",
+          "required": true
+        },
+        "feedback": {
+          "type": "string",
+          "description": "What to tell the session."
+        }
+      },
+      "output": "{ ok }"
+    },
+    {
+      "name": "archive",
+      "summary": "Archive a session. A person says yes first.",
+      "effect": "others",
+      "args": [
+        {
+          "name": "id",
+          "description": "The session: its whole id, or the first 8 or more characters of it.",
+          "required": true
+        }
+      ],
+      "flags": {
+        "owner-asked": {
+          "type": "boolean",
+          "description": "The owner asked for this archive, so a session this agent did not create may go."
+        }
+      },
+      "output": "{ ok }"
+    },
+    {
+      "name": "automation",
+      "summary": "Read, replace or clear a session's automation, which sends messages on a schedule. A person says yes first.",
+      "effect": "others",
+      "args": [
+        {
+          "name": "id",
+          "description": "The session: its whole id, or the first 8 or more characters of it.",
+          "required": true
+        }
+      ],
+      "flags": {
+        "clear": {
+          "type": "boolean",
+          "description": "Remove the session's automation."
+        },
+        "prompt": {
+          "type": "string",
+          "description": "What the automation sends."
+        }
+      },
+      "output": "{ ok }"
+    },
+    {
+      "name": "run-workflow",
+      "summary": "Run one of the app's workflows now. A person says yes first.",
+      "effect": "others",
+      "args": [
+        {
+          "name": "id",
+          "description": "The workflow's id, from workflows.",
+          "required": true
+        }
+      ],
+      "output": "{ ok }"
+    }
+  ],
+  "personOnly": {}
+}
