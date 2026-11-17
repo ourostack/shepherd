@@ -8,7 +8,7 @@
 
 Keeps the flock: the GitHub Copilot app's sessions, as work.
 
-Housesitter keeps the house: the Mac, and the app as a running process. Shepherd keeps the flock: the app's sessions. Each one is a small, separate job, and both talk to the app through the same library here.
+Housesitter keeps the house: the Mac, and the app as a running process. Shepherd keeps the flock: the app's sessions. Each one is a small, separate job. Housesitter imports the library here, and an agent such as Ouroboros calls the `shepherd` CLI, so the app has one client.
 
 ```mermaid
 flowchart LR
@@ -17,7 +17,7 @@ flowchart LR
   end
   HS[Housesitter<br/>keeps the Mac and the app running] -->|restart, relaunch| App
   SH[Shepherd<br/>keeps the sessions as work] -->|status, send, archive| App
-  OU[Ouroboros<br/>an agent that uses Shepherd and hears its notices] -->|library| SH
+  OU[Ouroboros<br/>an agent that uses Shepherd and hears its notices] -->|shepherd CLI| SH
   DK[Desk<br/>decides wakes] -->|wakes| SH
   SH -.->|delivers wakes and notices| OU
 ```
@@ -40,22 +40,22 @@ flowchart LR
 | The six-hour health watch | here now |
 | Billing account and quota | here now |
 | Sidebar tidy | here now |
-| Waiting-prompt notices | moving here, with the agent's switch to the CLI below |
+| Waiting-prompt notices | here now: `sessions` and `session` say what each one waits on (`awaiting_input`), and the agent that talks to the person tells them |
 | Delivering Desk's wakes | here now, off until `wakes.json` enables it |
 
 ## CLI
 
 ```sh
-npx github:ourostack/shepherd#v0.8.0 status                # one line per local session
-npx github:ourostack/shepherd#v0.8.0 status --json         # the same as data
-npx github:ourostack/shepherd#v0.8.0 restore-history <id>  # put back an archived session's compressed history
-npx github:ourostack/shepherd#v0.8.0 retire plan          # what retirement and the size watch would archive, flag or ask
-npx github:ourostack/shepherd#v0.8.0 watch --status        # what the health watch is following
-npx github:ourostack/shepherd#v0.8.0 quota                 # each Copilot account's quota, and the balancer's last tick
-npx github:ourostack/shepherd#v0.8.0 sidebar               # which projects the sidebar shows, and what apply would change
-npx github:ourostack/shepherd#v0.8.0 wakes                 # each wake runner's last run and the wakes it delivered
-npx github:ourostack/shepherd#v0.8.0 stuck                 # which stopped sessions a stuck resume would resume
-npx github:ourostack/shepherd#v0.8.0 help
+npx github:ourostack/shepherd#v0.8.1 status                # one line per local session
+npx github:ourostack/shepherd#v0.8.1 status --json         # the same as data
+npx github:ourostack/shepherd#v0.8.1 restore-history <id>  # put back an archived session's compressed history
+npx github:ourostack/shepherd#v0.8.1 retire plan          # what retirement and the size watch would archive, flag or ask
+npx github:ourostack/shepherd#v0.8.1 watch --status        # what the health watch is following
+npx github:ourostack/shepherd#v0.8.1 quota                 # each Copilot account's quota, and the balancer's last tick
+npx github:ourostack/shepherd#v0.8.1 sidebar               # which projects the sidebar shows, and what apply would change
+npx github:ourostack/shepherd#v0.8.1 wakes                 # each wake runner's last run and the wakes it delivered
+npx github:ourostack/shepherd#v0.8.1 stuck                 # which stopped sessions a stuck resume would resume
+npx github:ourostack/shepherd#v0.8.1 help
 ```
 
 ## For agents: the CLI contract
@@ -89,7 +89,7 @@ The resident watch also keeps one observer connection open to hear the questions
 
 The health watch follows each session that a resume sent a message to, for six hours. It asks a silent, erroring or stuck session once more, and tells the agent by name only about a session that stays broken.
 
-The same pass then runs the retire duties, once `~/.config/shepherd/retire.json` says `"enabled": true` (see Retirement). With no file it does nothing, so it never runs alongside Ouroboros' copy while that still runs. The wake runners and the stuck resume follow the same rule: each does nothing until its own config enables it (see Wakes and Stuck resume).
+The same pass then runs the retire duties, once `~/.config/shepherd/retire.json` says `"enabled": true` (see Retirement). With no file it does nothing. The wake runners and the stuck resume follow the same rule: each does nothing until its own config enables it (see Wakes and Stuck resume).
 
 ## Sidebar tidy
 
