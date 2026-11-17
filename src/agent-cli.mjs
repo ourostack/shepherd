@@ -1,7 +1,8 @@
 // The agent-facing verbs of `shepherd`: each reads its arguments as flags or as one JSON object on stdin (`--input -`), runs one
 // operation from operate.mjs, and prints its result. With --json the result is one line of JSON (on failure too, with ok false);
 // without it, a short text. Keys in the JSON input are the tool arguments the operations take (session_id, delivery_mode,
-// kickoff: { prompt, mode, … }); flags are their kebab-case names. Flags win over input.
+// kickoff: { prompt, mode, … }); flags are their kebab-case names. Flags win over input. A message to a session goes as a
+// peer message from Ouroboros; --as-user (as_user) sends the owner's own relayed words as a labelled user prompt instead.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -14,7 +15,7 @@ const TYPES = {
   state: ENUM(SESSION_STATES), count: { kind: 'int' }, session_id: { kind: 'string' }, id: { kind: 'string' }, message: { kind: 'string' },
   delivery_mode: ENUM(['immediate', 'enqueue']), name: { kind: 'string' }, project_id: { kind: 'string' }, session_kind: ENUM(['chat', 'project']),
   workspace_type: ENUM(['worktree', 'branch']), branch_name: { kind: 'string' }, answer: { kind: 'string' }, approved: { kind: 'bool' },
-  selected_action: { kind: 'string' }, feedback: { kind: 'string' }, owner_asked: { kind: 'bool' }, clear: { kind: 'bool' }, prompt: { kind: 'string' },
+  selected_action: { kind: 'string' }, feedback: { kind: 'string' }, owner_asked: { kind: 'bool' }, as_user: { kind: 'bool' }, clear: { kind: 'bool' }, prompt: { kind: 'string' },
   interval: ENUM(['once', 'minutes', 'daily', 'weekly', 'cron']), run_at: { kind: 'string' }, every_minutes: { kind: 'number' }, schedule_hour: { kind: 'number' },
   schedule_minute: { kind: 'number' }, schedule_day: { kind: 'number' }, cron_expression: { kind: 'string' },
   'kickoff.prompt': { kind: 'string' }, 'kickoff.mode': ENUM(['interactive', 'plan', 'autopilot']), 'kickoff.model': { kind: 'string' }, 'kickoff.agent': { kind: 'string' },
@@ -27,13 +28,14 @@ export const AGENT_VERBS = {
   sessions: { usage: 'shepherd sessions [--state busy|idle|waiting|stuck] [--json]', options: [['state', 'state']] },
   session: { usage: 'shepherd session <id> [--json]', positional: 'session_id' },
   messages: { usage: 'shepherd messages <id> [--count <n>] [--json]', positional: 'session_id', options: [['count', 'count']] },
-  send: { usage: 'shepherd send <id> --message <text> [--delivery immediate|enqueue] [--json]', positional: 'session_id', options: [['message', 'message'], ['delivery', 'delivery_mode']] },
+  send: { usage: 'shepherd send <id> --message <text> [--delivery immediate|enqueue] [--as-user] [--json]', positional: 'session_id', options: [['message', 'message'], ['delivery', 'delivery_mode']], switches: [['as-user', 'as_user']] },
   create: {
-    usage: 'shepherd create [--project <id|name> | --session-kind chat] [--name <title>] [--workspace-type worktree|branch] [--branch <name>] [--prompt <text>] [--mode interactive|plan|autopilot] [--model <m>] [--agent <a>] [--reasoning-effort <e>] [--permission-mode allow-all|manual] [--json]',
+    usage: 'shepherd create [--project <id|name> | --session-kind chat] [--name <title>] [--workspace-type worktree|branch] [--branch <name>] [--prompt <text>] [--mode interactive|plan|autopilot] [--model <m>] [--agent <a>] [--reasoning-effort <e>] [--permission-mode allow-all|manual] [--as-user] [--json]',
     options: [['project', 'project_id'], ['session-kind', 'session_kind'], ['name', 'name'], ['workspace-type', 'workspace_type'], ['branch', 'branch_name'], ['prompt', 'kickoff.prompt'], ['mode', 'kickoff.mode'], ['model', 'kickoff.model'], ['agent', 'kickoff.agent'], ['reasoning-effort', 'kickoff.reasoning_effort'], ['permission-mode', 'kickoff.permission_mode']],
+    switches: [['as-user', 'as_user']],
   },
   answer: { usage: 'shepherd answer <id> --answer <text> [--json]', positional: 'session_id', options: [['answer', 'answer']] },
-  plan: { usage: 'shepherd plan <id> --approved true|false [--action <option>] [--feedback <text>] [--json]', positional: 'session_id', options: [['approved', 'approved'], ['action', 'selected_action'], ['feedback', 'feedback']], required: ['approved'] },
+  plan: { usage: 'shepherd plan <id> --approved true|false [--action <option>] [--feedback <text>] [--as-user] [--json]', positional: 'session_id', options: [['approved', 'approved'], ['action', 'selected_action'], ['feedback', 'feedback']], switches: [['as-user', 'as_user']], required: ['approved'] },
   archive: { usage: 'shepherd archive <id> [--owner-asked] [--json]', positional: 'session_id', switches: [['owner-asked', 'owner_asked']] },
   automation: {
     usage: 'shepherd automation <id> [--clear | --interval once|minutes|daily|weekly|cron --prompt <text> …] [--json]', positional: 'session_id',

@@ -53,12 +53,13 @@ Agent verbs (each takes flags, or one JSON object on stdin with --input -; --jso
   shepherd sessions [--state busy|idle|waiting|stuck] [--json]   every session in the sidebar: summary and per-session activity
   shepherd session <id> [--json]                    one session, with what it waits on (awaiting_input)
   shepherd messages <id> [--count <n>] [--json]     its last n messages (default 6), oldest first
-  shepherd send <id> --message <text> [--delivery immediate|enqueue] [--json]
+  shepherd send <id> --message <text> [--delivery immediate|enqueue] [--as-user] [--json]
+                  (goes as a peer message from Ouroboros' own chat; --as-user sends the owner's relayed words, labelled, as a user prompt)
   shepherd create [--project <id|name> | --session-kind chat] [--name <title>] [--workspace-type worktree|branch]
                   [--branch <name>] [--prompt <text>] [--mode interactive|plan|autopilot] [--model <m>] [--agent <a>]
-                  [--reasoning-effort <e>] [--permission-mode allow-all|manual] [--json]
+                  [--reasoning-effort <e>] [--permission-mode allow-all|manual] [--as-user] [--json]
   shepherd answer <id> --answer <text> [--json]     answer a question this watch heard the session ask
-  shepherd plan <id> --approved true|false [--action <option>] [--feedback <text>] [--json]
+  shepherd plan <id> --approved true|false [--action <option>] [--feedback <text>] [--as-user] [--json]
   shepherd archive <id> [--owner-asked] [--json]    archive a session this agent created (or, with --owner-asked, one the owner asked for)
   shepherd automation <id> [--clear | --interval once|minutes|daily|weekly|cron --prompt <text> …] [--json]
                                                     its automations (no fields), replace one, or clear it

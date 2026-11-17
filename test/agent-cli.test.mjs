@@ -80,12 +80,12 @@ test('parseAgentVerb reads one JSON object from stdin with --input -, and a flag
 });
 
 test('parseAgentVerb refuses what it cannot read, with the usage line as the fix', () => {
-  const usage = 'shepherd send <id> --message <text> [--delivery immediate|enqueue] [--json]';
+  const usage = 'shepherd send <id> --message <text> [--delivery immediate|enqueue] [--as-user] [--json]';
   assert.deepEqual(parseAgentVerb('send', [IDLE, '--delivery', 'sometimes'], NOSTDIN), { error: ['--delivery takes immediate|enqueue', usage] });
   assert.deepEqual(parseAgentVerb('send', [IDLE, '--input', '-'], () => JSON.stringify({ bogus: 1 })), { error: ['unknown input key "bogus" for send', usage] });
   assert.deepEqual(parseAgentVerb('send', [IDLE, '--input', '-'], () => '[1]'), { error: ['--input - needs one JSON object on stdin', usage] });
   assert.deepEqual(parseAgentVerb('send', [IDLE, '--message'], NOSTDIN), { error: ['--message needs a value', usage] });
-  assert.deepEqual(parseAgentVerb('plan', [IDLE], NOSTDIN).error, ['plan needs --approved', 'shepherd plan <id> --approved true|false [--action <option>] [--feedback <text>] [--json]']);
+  assert.deepEqual(parseAgentVerb('plan', [IDLE], NOSTDIN).error, ['plan needs --approved', 'shepherd plan <id> --approved true|false [--action <option>] [--feedback <text>] [--as-user] [--json]']);
   assert.deepEqual(parseAgentVerb('session', [], NOSTDIN).error, ['session needs a session id', 'shepherd session <id> [--json]']);
 });
 
@@ -121,7 +121,7 @@ test('shepherd messages <id> --json returns the last messages, oldest first', as
 
 test('shepherd send <id> --message --json delivers, and a refused send exits 1 with ok false', async () => {
   await withApp(async ({ appHome, home, app }) => {
-    const r = await cli(['send', WORKING, '--message', 'carry on', '--delivery', 'enqueue', '--json', '--copilot-home', appHome], { home });
+    const r = await cli(['send', WORKING, '--message', 'carry on', '--delivery', 'enqueue', '--as-user', '--json', '--copilot-home', appHome], { home });
     assert.equal(r.status, 0, r.stderr);
     assert.equal(json(r).status, 'accepted');
     assert.equal(app.received.at(-1).delivery_mode, 'enqueue');
@@ -133,7 +133,7 @@ test('shepherd send <id> --message --json delivers, and a refused send exits 1 w
     assert.match(r.stderr, /^shepherd: no-message: the message is empty\. Fix: pass --message <text>\.$/m);
   });
   await withApp(async ({ appHome, home }) => {
-    const r = await cli(['send', '--input', '-', '--json', '--copilot-home', appHome], { home, stdin: JSON.stringify({ session_id: IDLE, message: 'hi' }) });
+    const r = await cli(['send', '--input', '-', '--json', '--copilot-home', appHome], { home, stdin: JSON.stringify({ session_id: IDLE, message: 'hi', as_user: true }) });
     assert.equal(r.status, 1);
     assert.equal(json(r).ok, false);
     assert.match(json(r).error, /is archived/);
@@ -142,7 +142,7 @@ test('shepherd send <id> --message --json delivers, and a refused send exits 1 w
 
 test('shepherd create --json makes a project session on the project and prints its id', async () => {
   await withApp(async ({ appHome, home }) => {
-    const r = await cli(['create', '--project', 'Shepherd', '--name', 'Lane', '--prompt', 'Go', '--json', '--copilot-home', appHome], { home });
+    const r = await cli(['create', '--project', 'Shepherd', '--name', 'Lane', '--prompt', 'Go', '--as-user', '--json', '--copilot-home', appHome], { home });
     assert.equal(r.status, 0, r.stderr);
     const c = json(r);
     assert.equal(c.ok, true);
@@ -170,7 +170,7 @@ test('shepherd answer <id> --answer --json answers the question the tracker hear
 
 test('shepherd plan <id> --approved --json approves the plan and sends its feedback', async () => {
   await withApp(async ({ appHome, home, app }) => {
-    const r = await cli(['plan', PLANNING, '--approved', 'true', '--action', 'go', '--feedback', 'Thanks', '--json', '--copilot-home', appHome], { home });
+    const r = await cli(['plan', PLANNING, '--approved', 'true', '--action', 'go', '--feedback', 'Thanks', '--as-user', '--json', '--copilot-home', appHome], { home });
     assert.equal(r.status, 0, r.stderr);
     assert.deepEqual(json(r), { ok: true, approved: true, session_id: PLANNING, feedback_sent: true });
     assert.equal(app.received.find((m) => m.type === 'respond_to_exit_plan_mode').approved, true);
