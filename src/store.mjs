@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { archive } from './socket.mjs';
 
-export const FILES = { successions: 'successions.json', oversize: 'oversize.json', retireLog: 'retire-log.jsonl', probes: 'probes.json', pending: 'pending.json', identity: 'identity.json' };
+export const FILES = { successions: 'successions.json', oversize: 'oversize.json', retireLog: 'retire-log.jsonl', probes: 'probes.json', pending: 'pending.json', identity: 'identity.json', lineage: 'lineage.json' };
 export const DELIVER_MS = 60000;
 
 export const statePath = (d, name) => path.join(d.state, FILES[name]);

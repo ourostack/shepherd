@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { ShepherdError } from './error.mjs';
 import { coordinatorOf, handoffSuccessors } from './coordinator.mjs';
-import { readSuccessions, successorOf } from './handoff.mjs';
+import { claimants, readLineage, readSuccessions, refreshSuccessions, successorOf } from './handoff.mjs';
 import { messagesIn, readTail, TAIL_BYTES } from './history.mjs';
 import { restoreHistory } from './compress.mjs';
 import { readOversize } from './size-watch.mjs';
@@ -58,7 +58,39 @@ export function findSession(listed, value) {
   throw new ShepherdError({ code: 'no-session', problem: `no session '${wanted}' in the Copilot app`, fix: 'list the sessions with shepherd sessions' });
 }
 
-const resolve = async (d, value) => findSession(await rows(d), value);
+// A session by id like findSession, and when that id names no listed session (archived or gone) but a hand-off chain leads from it
+// to a listed one, that successor: { row, from, note }. A prefix of 8 or more characters names the predecessor too. Anything
+// else, including two different predecessors for one prefix, fails as findSession does.
+export function followSession(d, listed, value) {
+  try {
+    return { row: findSession(listed, value) };
+  } catch (error) {
+    if (error?.code !== 'no-session') throw error;
+    const wanted = str(value)?.trim().toLowerCase() ?? '';
+    let successions;
+    try {
+      successions = { ...readLineage(d), ...refreshSuccessions(d, listed.map((r) => r.id)) };
+    } catch { throw error; }
+    const named = new Set(Object.values(successions).map((e) => e.predecessor).filter((p) => typeof p === 'string' && wanted.length >= PREFIX_MIN && p.startsWith(wanted)));
+    if (named.size !== 1) throw error;
+    const [from] = named;
+    const end = successorOf(from, successions);
+    const row = listed.find((r) => r.id === end);
+    if (!row) throw error;
+    let rivals = 0;
+    for (let at = from, seen = new Set(); at && !seen.has(at); at = claimants(at, successions)[0]?.id) {
+      seen.add(at);
+      rivals = Math.max(rivals, claimants(at, successions).length);
+    }
+    const short = (id) => id.slice(0, 8);
+    const note = `${short(from)} has been handed off: delivered to its successor ${row.name} (${short(row.id)})${rivals > 1 ? `, the newest of ${rivals} sessions that claim to succeed it` : ''}`;
+    return { row, from, note };
+  }
+}
+
+const resolve = async (d, value) => (await resolved(d, value)).row;
+const resolved = async (d, value) => followSession(d, await rows(d), value);
+const followed = (found) => (found.from ? { followed_from: found.from, note: found.note } : {});
 
 // Who coordinates a session now, beside the app's own field (see coordinator.mjs).
 function coordination(row, listed, d, successors) {
@@ -120,7 +152,8 @@ export async function sessions(d, { state } = {}) {
 
 export async function session(d, id) {
   const listed = await rows(d);
-  return status(findSession(listed, id), listed, readPending(d), d, handoffSuccessors(d));
+  const found = followSession(d, listed, id);
+  return { ...status(found.row, listed, readPending(d), d, handoffSuccessors(d)), ...followed(found) };
 }
 
 // The last `count` user and assistant messages of a session, oldest first, from its history. The read widens (4 MB, 16 MB,
@@ -153,9 +186,11 @@ export function readMessages(d, id, count = 6) {
 
 export async function messages(d, id, count = 6) {
   const listed = await rows(d);
-  const row = findSession(listed, id);
+  const found = followSession(d, listed, id);
+  const row = found.row;
   const history = readMessages(d, row.id, count);
   return {
+    ...followed(found),
     session_id: row.id, name: row.name, state: row.state, last_activity: row.lastActivity, ...history,
     coverage: history.missing ? 'missing' : history.skippedEvents ? 'incomplete' : row.remote ? 'local-only' : 'local',
     freshness: 'point-in-time; re-read before reporting current progress',
@@ -199,11 +234,13 @@ async function tell(d, id, message, mode, asUser) {
 export async function send(d, args) {
   const message = typeof args.message === 'string' ? args.message : '';
   if (!message.trim()) throw new ShepherdError({ code: 'no-message', problem: 'the message is empty', fix: 'pass --message <text>' });
-  const row = await resolve(d, args.session_id);
+  const found = await resolved(d, args.session_id);
+  const row = found.row;
   const sent = await tell(d, row.id, message, args.delivery_mode === 'enqueue' ? 'enqueue' : 'immediate', args.as_user === true);
-  return sent.peer
+  const result = sent.peer
     ? compact({ ok: sent.ok, status: sent.ok ? 'sent' : 'failed', session_id: row.id, name: row.name, from: sent.peer.from, from_session_id: sent.peer.from_session_id, message: sent.peer.message, error: sent.error })
     : deliveryResult(row, sent);
+  return { ...result, ...followed(found) };
 }
 
 // The project a create request names: its id, or its name, as the app lists it.
@@ -294,7 +331,7 @@ function handedOff(d, row) {
 // Archives a session. A session this agent did not create is archived only when the owner asked for it (owner_asked) or it is
 // oversize and a newer session names it as handed off. Archiving a workspace deletes its worktree.
 export async function archiveSession(d, args) {
-  const row = await resolve(d, args.session_id);
+  const row = findSession(await rows(d), args.session_id);
   const made = readProbes(d);
   let reason = null;
   if (!made[row.id]) {
