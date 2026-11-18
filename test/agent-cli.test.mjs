@@ -26,10 +26,10 @@ const lane = (id, sessionId, over = {}) => ({
 
 // The CLI as a child process (async, so the in-process app can answer it), with HOME in the test's folder for its state.
 const ACTIONS = ['send', 'create', 'answer', 'plan', 'archive', 'automation', 'run-workflow'];
-function cli(args, { home, stdin = null, why = true }) {
+function cli(args, { home, stdin = null, why = true, env = {} }) {
   const argv = why && ACTIONS.includes(args[0]) ? [...args, '--why', 'a test asked for it'] : args;
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [bin, ...argv], { env: { ...process.env, HOME: home } });
+    const child = spawn(process.execPath, [bin, ...argv], { env: { ...process.env, HOME: home, ...env } });
     let stdout = '', stderr = '';
     child.stdout.on('data', (c) => { stdout += c; });
     child.stderr.on('data', (c) => { stderr += c; });
@@ -229,9 +229,18 @@ test('a bad agent verb is a usage error with the fix, and an app that is not run
   }
 });
 
+test('by default an action without --why warns and goes on to the next check', async () => {
+  await withApp(async ({ appHome, home }) => {
+    const soft = await cli(['send', '--json', '--copilot-home', appHome], { home, why: false });
+    assert.match(soft.stderr, /warning: send was run without --why/);
+    assert.doesNotMatch(soft.stderr, /needs --why/);
+    assert.match(soft.stderr, /needs <id>/);
+  });
+});
+
 test('an action refuses without --why before it looks for the id, and a missing id says where to get one', async () => {
   await withApp(async ({ appHome, home }) => {
-    const noWhy = await cli(['send', '--json', '--copilot-home', appHome], { home, why: false });
+    const noWhy = await cli(['send', '--json', '--copilot-home', appHome], { home, why: false, env: { SHEPHERD_STRICT_WHY: '1' } });
     assert.equal(noWhy.status, 2);
     assert.match(noWhy.stderr, /needs --why/);
     const noId = await cli(['send', '--json', '--copilot-home', appHome], { home });
