@@ -29,6 +29,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ShepherdError } from './error.mjs';
+import { tokenCommand } from './quota.mjs';
 import { readJson, writeJson } from './store.mjs';
 
 const lower = (s) => String(s ?? '').toLowerCase();
@@ -188,7 +189,7 @@ const afterFloor = (api, nextAt) => (api.rate && api.rate.remaining < QUOTA_FLOO
 // The account's own token first (SHEPHERD_INBOX_TOKEN_<LOGIN>, then `gh auth token --user`), and only then the shell's generic ones, so
 // a shell signed in as another account never decides whose inbox is read; the login is checked against the account anyway.
 export const tokenEnvName = (account) => `SHEPHERD_INBOX_TOKEN_${String(account).toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
-export function resolveToken(acct, env = process.env, run = (account) => execFileSync('gh', ['auth', 'token', '--user', account], { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, GH_TOKEN: '', GITHUB_TOKEN: '' } })) {
+export function resolveToken(acct, env = process.env, run = (account) => execFileSync(tokenCommand('github.com', account), ['auth', 'token', '--user', account], { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, GH_TOKEN: '', GITHUB_TOKEN: '' } })) {
   if (env[tokenEnvName(acct.account)]) return env[tokenEnvName(acct.account)];
   try {
     const t = run(acct.account).trim();
