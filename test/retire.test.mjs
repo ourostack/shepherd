@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { FINISHED_IDLE_MS, HANDOFF_QUIET_MS, childrenNote, retireConfig, retireSessions, watchRetire } from '../src/retire.mjs';
+import { COORDINATOR_RECENT_MS, FINISHED_IDLE_MS, HANDOFF_QUIET_MS, IDLE_LANDED_MS, IDLE_LANDED_PER_PASS, census, childrenNote, retireConfig, retireSessions, watchRetire } from '../src/retire.mjs';
 import { fakeApp, iso, NOW, row, sessionHistory, testDeps, working } from './fake-sidebar.mjs';
 
 const P = 'aaaaaaaa-0000-4000-8000-000000000001';
@@ -131,11 +131,13 @@ test('a lane whose recorded coordinator is archived is kept while a listed sessi
 test('the config is off with no file, on only for "enabled": true, and an unreadable file is an error', () => {
   const home = tmp('retire-config-');
   const file = path.join(home, 'retire.json');
-  assert.deepEqual(retireConfig(file), { enabled: false });
+  assert.deepEqual(retireConfig(file), { enabled: false, idleLanded: false });
   fs.writeFileSync(file, '{"enabled": "yes"}');
-  assert.deepEqual(retireConfig(file), { enabled: false });
+  assert.deepEqual(retireConfig(file), { enabled: false, idleLanded: false });
   fs.writeFileSync(file, '{"enabled": true}');
-  assert.deepEqual(retireConfig(file), { enabled: true });
+  assert.deepEqual(retireConfig(file), { enabled: true, idleLanded: false });
+  fs.writeFileSync(file, '{"enabled": true, "idleLanded": true}');
+  assert.deepEqual(retireConfig(file), { enabled: true, idleLanded: true });
   fs.writeFileSync(file, '{ not json');
   assert.throws(() => retireConfig(file), (e) => e.code === 'retire-config');
   fs.rmSync(home, { recursive: true, force: true });
@@ -249,4 +251,88 @@ test('retire: a handed-off session with unlanded work is held, once, not again a
   assert.equal(e.filter((x) => x.id === P).length, 1);
   assert.deepEqual(app.archived, []);
   fs.rmSync(home, { recursive: true, force: true });
+});
+
+// ---------- idle and landed: any idle session with its work on main, coordinated or not ----------
+
+const idle = (ms, over = {}) => ({ lastActivity: iso(NOW - ms), updatedAt: iso(NOW - ms), ...over });
+const clean = { checkLanded: async () => ({ outcome: 'clean' }) };
+const LEAD = 'ffffffff-0000-4000-8000-000000000006';
+
+test('idle-landed: archives an idle session, coordinated or not, once it has been quiet two hours; off unless asked', async () => {
+  const home = tmp('retire-idle-');
+  const app = fakeApp();
+  const d = { ...testDeps(home, { app }), ...clean };
+  const listed = [row(LEAD, { ...working, name: 'Lead', createdAt: iso(NOW - 40 * 3600_000) }), row(ORPHAN, idle(IDLE_LANDED_MS + 1, { coordinatingCreatorSessionId: LEAD })), row(CHILD, idle(IDLE_LANDED_MS + 1))];
+  assert.deepEqual(await retireSessions(listed, d, { apply: true }), [], 'off by default');
+  const e = await retireSessions(listed, d, { apply: true, idleLanded: true });
+  assert.deepEqual(e.map((x) => [x.id, x.reason, x.done]).sort(), [[CHILD, 'idle-landed', true], [ORPHAN, 'idle-landed', true]].sort());
+  assert.match(e.find((x) => x.id === CHILD).why, /^idle 2 h, no coordinator; /);
+  assert.equal(app.archived.length, 2);
+  const log = fs.readFileSync(path.join(d.state, 'retire-log.jsonl'), 'utf8');
+  assert.match(log, /idle-landed/);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('idle-landed: never takes a session that works, waits, is recent, has a pull request or automation, or is a coordinator', async () => {
+  const home = tmp('retire-idle-guards-');
+  const app = fakeApp();
+  const d = { ...testDeps(home, { app }), ...clean };
+  const old = idle(IDLE_LANDED_MS + 1);
+  const kid = (over) => row(CHILD, { coordinatingCreatorSessionId: ORPHAN, createdAt: iso(NOW - 30 * 3600_000), ...idle(IDLE_LANDED_MS + 1), ...over });
+  const cases = {
+    working: [row(ORPHAN, { ...working })],
+    waiting: [row(ORPHAN, { ...old, state: 'waiting', awaiting: 'input' })],
+    'quiet under two hours': [row(ORPHAN, idle(IDLE_LANDED_MS - 60_000))],
+    'open pull request': [row(ORPHAN, { ...old, openPullRequest: 'https://github.com/example/project/pull/1' })],
+    automation: [row(ORPHAN, { ...old, automation: true })],
+    'remote': [row(ORPHAN, { ...old, remote: true })],
+    'a working child': [row(ORPHAN, old), kid(working)],
+    'a child made in the last day': [row(ORPHAN, old), kid({ createdAt: iso(NOW - COORDINATOR_RECENT_MS + 60_000) })],
+    'named for its role': [row(ORPHAN, { ...old, name: 'Desk epoch 3 (2)' }), row(CHILD, { ...old, name: 'the coordinator' }), row(LEAD, { ...old, name: 'ouro ui' })],
+  };
+  for (const [name, listed] of Object.entries(cases)) {
+    const e = await retireSessions(listed, d, { apply: true, idleLanded: true });
+    const taken = e.filter((x) => x.what === 'archive').map((x) => x.id);
+    assert.ok(!taken.includes(ORPHAN), name);
+    if (name === 'named for its role') assert.deepEqual(taken, [], name);
+  }
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('idle-landed: a child idle for days is archived once its coordinator has no working child and made none lately, and unlanded work is held, never landed', async () => {
+  const home = tmp('retire-idle-landed-');
+  const app = fakeApp();
+  let landed = false;
+  const d = { ...testDeps(home, { app }), checkLanded: async (r) => (r.id === CHILD ? { outcome: 'land', why: 'uncommitted changes on work' } : { outcome: 'clean' }), land: async () => { landed = true; return { ok: true }; } };
+  const old = idle(IDLE_LANDED_MS + 1);
+  const listed = [row(ORPHAN, { ...old, createdAt: iso(NOW - 90 * 3600_000), name: 'plain' }), row(CHILD, { ...old, name: 'dirty' }), row(LEAD, { ...old, name: 'tidy' })];
+  const e = await retireSessions(listed, d, { apply: true, idleLanded: true });
+  assert.deepEqual(e.map((x) => [x.id, x.what, x.reason]).sort(), [[CHILD, 'hold', 'unlanded'], [LEAD, 'archive', 'idle-landed'], [ORPHAN, 'archive', 'idle-landed']].sort());
+  assert.equal(landed, false);
+  assert.deepEqual(app.archived.length, 2);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('idle-landed: a pass that applies checks a few per pass and does not re-check a held session for half an hour; a plan checks all', async () => {
+  const home = tmp('retire-idle-cap-');
+  const ids = Array.from({ length: IDLE_LANDED_PER_PASS + 5 }, (_, i) => `1000000${i.toString(16).padStart(1, '0')}-0000-4000-8000-0000000000${String(i).padStart(2, '0')}`);
+  let checks = 0;
+  const base = { ...testDeps(home, { app: fakeApp() }), checkLanded: async () => { checks += 1; return { outcome: 'hold', why: 'dirty' }; } };
+  const listed = ids.map((id, i) => row(id, idle(IDLE_LANDED_MS + 1 + i)));
+  await retireSessions(listed, base, { apply: true, idleLanded: true });
+  assert.equal(checks, IDLE_LANDED_PER_PASS);
+  checks = 0;
+  await retireSessions(listed, base, { apply: true, idleLanded: true });
+  assert.equal(checks, 5, 'the first pass\'s holds are not looked at again');
+  checks = 0;
+  await retireSessions(listed, base, { apply: false, idleLanded: true });
+  assert.equal(checks, ids.length);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('census counts sessions by state and age, coordinated or not, and the memory the idle ones hold', () => {
+  const h = 3600_000;
+  const c = census([row(LEAD, working), row(ORPHAN, { ...idle(h), coordinatingCreatorSessionId: LEAD }), row(CHILD, idle(5 * h)), row(P, idle(30 * h)), row(S, { ...idle(5 * h), coordinatingCreatorSessionId: GONE })], NOW);
+  assert.deepEqual(c, { total: 5, running: 1, idleUnder2h: 1, idle2to24h: 2, idleOver24h: 1, coordinated: 1, orphans: 4, remote: 0, idleMemoryMb: 600 });
 });

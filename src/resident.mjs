@@ -72,7 +72,7 @@ export function watchDuties({ copilotHome, quiet = false, say = () => {}, log = 
       name: 'retire',
       run: async () => {
         if (!retireConfig().enabled) return;
-        const r = await watchRetire(retireDeps({ copilotHome }), { apply: true });
+        const r = await watchRetire(retireDeps({ copilotHome }), { apply: true, idleLanded: retireConfig().idleLanded });
         for (const err of r.errors) log(`shepherd: retire: ${err}`);
         for (const s of r.unload?.stop ?? []) if (s.done && !quiet) say(`retire: stopped the idle runtime ${s.pid} (${s.sessions} session(s), ${s.rssMb} MB) under swap pressure; a message to a session loads it again`);
         for (const e of [...r.retire, ...r.size]) if (e.done && e.what !== 'flag' && !quiet) say(`retire: ${actionLine(e)}`);

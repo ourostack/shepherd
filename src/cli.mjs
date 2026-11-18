@@ -145,7 +145,8 @@ export const COMMANDS = [
       const apply = input.action === 'apply';
       const file = retireFile();
       if (apply && !retireConfig(file).enabled) throw usage('retire', `apply is off, because ${file} does not say "enabled": true`, `set "enabled": true in ${file}, or run shepherd retire plan`);
-      return watchRetire(retireDeps({ copilotHome: copilotHome(input) }), { apply });
+      const idleLanded = retireConfig(file).idleLanded;
+      return watchRetire(retireDeps({ copilotHome: copilotHome(input) }), { apply, idleLanded: apply ? idleLanded : idleLanded || 'plan' });
     },
   }),
   command({
