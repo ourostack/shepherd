@@ -49,9 +49,14 @@ export async function checkLanded(row, d) {
   if ((await ld.git(cwd, ['fetch', '-q', 'origin'])).code !== 0) return hold('git could not fetch origin, so what is on main cannot be confirmed');
   const head = await ld.git(cwd, ['symbolic-ref', '--short', '-q', 'HEAD']);
   const branch = out(head);
-  if (!branch) return hold('its working folder is on a detached HEAD');
   const sha = out(await ld.git(cwd, ['rev-parse', 'HEAD']));
   const dirty = out(await ld.git(cwd, ['status', '--porcelain'])).length > 0;
+  if (!branch) {
+    // A detached HEAD loses nothing when the tree is clean and some branch on origin already contains the commit.
+    const on = dirty ? '' : out(await ld.git(cwd, ['branch', '-r', '--contains', 'HEAD']));
+    if (!dirty && on) return { outcome: 'clean', why: 'its detached HEAD is already on origin' };
+    return hold('its working folder is on a detached HEAD');
+  }
   const def = out(await ld.git(cwd, ['symbolic-ref', '--short', '-q', 'refs/remotes/origin/HEAD'])).replace(/^origin\//, '') || 'main';
   const count = async (range) => {
     const r = await ld.git(cwd, ['rev-list', '--count', range]);
