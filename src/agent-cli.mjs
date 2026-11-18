@@ -141,9 +141,6 @@ export function renderText(verb, result) {
 
 const failed = (r) => r.ok === false || r.created === false;
 
-// Temporary soft mode: a missing --why warns instead of refusing, until the callers that need it have landed. SHEPHERD_STRICT_WHY=1 refuses.
-const strictWhy = () => ['1', 'true'].includes(process.env.SHEPHERD_STRICT_WHY ?? '');
-
 // The kit commands of the agent verbs. `guard` turns a library error into the kit's; `copilotHome` reads the --copilot-home flag.
 export function agentCommands({ guard, copilotHome }) {
   return Object.entries(AGENT_VERBS).map(([verb, spec]) => {
@@ -157,7 +154,7 @@ export function agentCommands({ guard, copilotHome }) {
       name: verb,
       summary: spec.summary,
       effect: spec.read ? 'private' : 'others',
-      ...(spec.read ? {} : { why: strictWhy() ? 'required' : 'optional' }),
+      ...(spec.read ? {} : { why: 'required' }),
       args: spec.positional ? [{ name: 'id', source: spec.positional === 'session_id' ? 'sessions' : spec.summary.startsWith('Run') ? 'workflows' : 'sessions', description: spec.positional === 'session_id' ? 'The session: its whole id, or the first 8 or more characters of it.' : 'The id, as shepherd lists it.' }] : [],
       flags,
       output: '{ ok, … } as the operation answers; { ok: false, code, error } with the reason when the app refused or did not answer',
@@ -171,7 +168,6 @@ export function agentCommands({ guard, copilotHome }) {
         summary: `Would run shepherd ${verb}${input.id ? ` on ${input.id}` : ''}: ${spec.summary} Nothing was sent. ${AUDIENCE[0].toUpperCase()}${AUDIENCE.slice(1)} will see it.`,
       }),
       async run(input, ctx) {
-        if (!spec.read && !strictWhy() && !input.why) process.stderr.write(`shepherd: warning: ${verb} was run without --why; a later release will refuse it. Add --why "who asked and what they said".\n`);
         const args = toolArgs(verb, input);
         // Checked here, after --why, so a call without both is told about --why first.
         if (spec.positional && args[spec.positional] === undefined) {
