@@ -1,6 +1,6 @@
 // `shepherd watch --every <s>`: the resident mode the launch agent runs. Each pass runs every duty in turn (the health
 // watch, then the quota balancer's tick, with apply, then the sidebar tidy, then the retire duty: hand-off retirement and the
-// size watch, then the wake runners, the stuck resume and the repository trust, each once its config enables it). Passes never overlap, and a duty
+// size watch, then the wake runners, the stuck resume, the repository trust and the GitHub inbox, each once its config enables it). Passes never overlap, and a duty
 // that throws is logged while the next one still runs.
 import { deps } from './sessions.mjs';
 import { healthDeps, pass } from './health-watch.mjs';
@@ -11,6 +11,7 @@ import { rows as sessionRows } from './rows.mjs';
 import { runDueWakes, wakesConfig } from './wakes.mjs';
 import { resumeStuck, stuckResumeConfig } from './stuck-resume.mjs';
 import { trustAll, trustConfig } from './trust.mjs';
+import { inboxConfig, pollInbox } from './inbox.mjs';
 import { listenPrompts } from './prompts.mjs';
 import { sample as sampleResponsiveness } from './responsiveness.mjs';
 
@@ -108,6 +109,16 @@ export function watchDuties({ copilotHome, quiet = false, say = () => {}, log = 
         const r = await trustAll(deps({ copilotHome }));
         if (r.skipped) log(`shepherd: trust: ${r.skipped}`);
         for (const p of r.trusted) log(`shepherd: trust: trusted ${p.name} (${p.id})`);
+      },
+    },
+    {
+      name: 'inbox',
+      run: async () => {
+        const cfg = inboxConfig();
+        if (!cfg.enabled) return;
+        const r = await pollInbox(deps({ copilotHome }), cfg, { apply: true });
+        for (const x of r.done ?? []) log(`shepherd: inbox: done ${x.repo} "${x.title}" [${x.reason}] ${x.why}`);
+        if (!quiet && r.done?.length) say(`inbox: ${r.done.length} agent-caused notification(s) marked done`);
       },
     },
   ];
