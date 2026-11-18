@@ -64,7 +64,7 @@ export async function checkLanded(row, d) {
   if (unpushed === null) return hold('git could not count its unpushed commits');
   const base = { cwd, branch, sha, def, dirty, unpushed, ahead, account };
   if (branch === def) {
-    if (dirty || ahead > 0) return { ...base, ...hold(`it has ${dirty ? 'uncommitted changes' : ''}${dirty && ahead > 0 ? ' and ' : ''}${ahead > 0 ? `${ahead} unpushed commit(s)` : ''} on ${def} itself, which cannot be landed by a pull request`) };
+    if (dirty || ahead > 0) return { ...base, ...hold(`it has ${dirty ? 'uncommitted changes' : ''}${dirty && ahead > 0 ? ' and ' : ''}${ahead > 0 ? `${ahead} unpushed commit(s)` : ''} on ${def} itself, which cannot be landed by a pull request`), onDefault: true };
     return { ...base, outcome: 'clean', why: `clean on ${def}` };
   }
   const listed = await ld.gh(cwd, ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'number,state,url,headRefOid']);
@@ -111,7 +111,7 @@ export async function landedGate(row, d, apply, reason, { land: mayLand = true }
   try { found = await (d.checkLanded ? d.checkLanded(row, d) : checkLanded(row, d)); } catch (e) { found = { outcome: 'hold', why: `its work could not be checked (${e.message})` }; }
   if (found.outcome === 'clean') return null;
   const entry = (what, why, over = {}) => ({ what, id: row.id, name: row.name, reason, done: false, why, ...over });
-  if (found.outcome === 'hold') return entry('hold', found.why, { reason: 'unlanded', pr: found.pr });
+  if (found.outcome === 'hold') return entry('hold', found.why, { reason: 'unlanded', pr: found.pr, ...(found.onDefault ? { onDefault: true } : {}) });
   if (!mayLand) return entry('hold', found.why, { reason: 'unlanded' });
   if (!apply) return entry('land', `${found.why}: would commit, push and open a pull request with auto-merge, and archive once it merges`, { reason: 'unlanded' });
   const r = await (d.land ? d.land(found, d) : land(found, d));
