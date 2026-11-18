@@ -3,7 +3,7 @@
 // A write that fails is ignored and a read that fails is empty: each is a record, not a gate.
 import fs from 'node:fs';
 import path from 'node:path';
-import { archive } from './socket.mjs';
+import { ALREADY_ARCHIVED, archive, deleteWorkspace } from './socket.mjs';
 
 export const FILES = { successions: 'successions.json', oversize: 'oversize.json', retireLog: 'retire-log.jsonl', probes: 'probes.json', pending: 'pending.json', identity: 'identity.json', lineage: 'lineage.json' };
 export const DELIVER_MS = 60000;
@@ -35,6 +35,12 @@ function appendLog(file, row) {
 export async function archiveRow(d, row, reason, note) {
   const r = await archive(d, row, { keepWorktree: true });
   if (r.ok) appendLog(statePath(d, 'retireLog'), { at: new Date(d.now()).toISOString(), id: row.id, name: row.name, reason, note });
+  // The app refuses to archive a cloud session whose GitHub task is already archived and keeps it listed: drop the entry instead.
+  if (!r.ok && row.remote && ALREADY_ARCHIVED.test(r.error ?? '')) {
+    const del = await deleteWorkspace(d, row);
+    if (del.ok) appendLog(statePath(d, 'retireLog'), { at: new Date(d.now()).toISOString(), id: row.id, name: row.name, reason, note: `${note}; its GitHub task was already archived, so its sidebar entry was deleted` });
+    return del.ok;
+  }
   return r.ok;
 }
 

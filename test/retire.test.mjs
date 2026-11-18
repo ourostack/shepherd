@@ -333,6 +333,20 @@ test('a cloud-hosted session idle over a day is archived with nothing to land, c
   fs.rmSync(home, { recursive: true, force: true });
 });
 
+test('a cloud session whose GitHub task is already archived (the app answers 409) has its sidebar entry deleted, a local one never', async () => {
+  const home = tmp('retire-409-');
+  const app = fakeApp({ alreadyArchived: ['w-aaaa', 'w-bbbb'] });
+  const d = { ...testDeps(home, { app }), ...clean };
+  const old = { ...idle(FINISHED_IDLE_MS + 1), remote: true };
+  const e = await retireSessions([row(P, old), row(S, { ...old, remote: false })], d, { apply: true, idleLanded: true });
+  assert.deepEqual(e.filter((x) => x.what === 'archive').map((x) => x.id), [P]);
+  assert.deepEqual(app.deleted, ['w-aaaa'], 'only the cloud session is deleted');
+  assert.deepEqual(app.archived, []);
+  const log = fs.readFileSync(path.join(d.state, 'retire-log.jsonl'), 'utf8');
+  assert.match(log, /already archived, so its sidebar entry was deleted/);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
 test('idle-landed: sessions the app refuses to archive do not use up every pass', async () => {
   const home = tmp('retire-refused-');
   const app = fakeApp();
