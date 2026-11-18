@@ -122,7 +122,7 @@ test('shepherd install --dry-run prints the launch agent and writes nothing', ()
 
 test('shepherd quota and watch --every: bad arguments are usage errors; quota status says when no tick has run', () => {
   assert.equal(run(['quota', 'sweep']).status, 2);
-  assert.match(run(['quota', 'sweep']).stderr, /shepherd: quota: it takes read or plan or status, not "sweep"\. Fix: shepherd quota status\./);
+  assert.match(run(['quota', 'sweep']).stderr, /shepherd: quota: it takes read, plan or status, not "sweep"\. Fix: shepherd quota read\./);
   assert.equal(run(['watch', '--every', '0']).status, 2);
   assert.equal(run(['watch', '--every', '60', '--status']).status, 2);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shepherd-quota-cli-'));
