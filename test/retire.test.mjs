@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { COORDINATOR_RECENT_MS, FINISHED_IDLE_MS, HANDOFF_QUIET_MS, IDLE_LANDED_MS, IDLE_LANDED_PER_PASS, census, childrenNote, drainTargets, retireConfig, retireSessions, watchRetire } from '../src/retire.mjs';
+import { COORDINATOR_RECENT_MS, FINISHED_IDLE_MS, PRESSURE_MAIN_MS, HANDOFF_QUIET_MS, IDLE_LANDED_MS, IDLE_LANDED_PER_PASS, census, childrenNote, drainTargets, retireConfig, retireSessions, watchRetire } from '../src/retire.mjs';
 import { fakeApp, iso, NOW, row, sessionHistory, testDeps, working } from './fake-sidebar.mjs';
 
 const P = 'aaaaaaaa-0000-4000-8000-000000000001';
@@ -271,6 +271,22 @@ test('idle-landed: archives an idle session, coordinated or not, once it has bee
   assert.equal(app.archived.length, 2);
   const log = fs.readFileSync(path.join(d.state, 'retire-log.jsonl'), 'utf8');
   assert.match(log, /idle-landed/);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('swap pressure: a session idle a day whose only unlanded work is on main itself is archived; without pressure, or with work on a branch, it stays', async () => {
+  const home = tmp('retire-pressure-');
+  const app = fakeApp();
+  const onMain = { checkLanded: async () => ({ outcome: 'hold', onDefault: true, why: 'it has uncommitted changes on main itself, which cannot be landed by a pull request' }) };
+  const onBranch = { checkLanded: async () => ({ outcome: 'hold', why: '1 unpushed commit(s) on a-branch' }) };
+  let n = 0;
+  const run = (deps, swapPct) => retireSessions([row(`${ORPHAN.slice(0, -2)}0${n}`, idle(PRESSURE_MAIN_MS + 1)), row(`${CHILD.slice(0, -2)}0${n++}`, idle(PRESSURE_MAIN_MS - 60_000))], { ...testDeps(home, { app }), ...deps }, { apply: true, idleLanded: true, swapPct });
+  assert.deepEqual((await run(onMain, 80)).map((x) => x.what), ['hold', 'hold'], 'no pressure');
+  assert.deepEqual((await run(onBranch, 98)).map((x) => x.what), ['hold', 'hold'], 'a branch with unpushed work stays');
+  const e = await run(onMain, 98);
+  assert.deepEqual(e.map((x) => [x.id, x.what, x.reason]), [[`${ORPHAN.slice(0, -2)}02`, 'archive', 'swap-pressure'], [`${CHILD.slice(0, -2)}02`, 'hold', 'unlanded']]);
+  assert.match(e[0].why, /swap 98% full; its folder keeps the changes it has on main/);
+  assert.equal(app.archived.length, 1);
   fs.rmSync(home, { recursive: true, force: true });
 });
 

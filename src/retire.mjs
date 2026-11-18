@@ -29,7 +29,7 @@ import { deps } from './sessions.mjs';
 import { sendTo } from './socket.mjs';
 import { landedGate } from './landed.mjs';
 import { realProbes } from './responsiveness.mjs';
-import { COORDINATOR_RECENT_MS, COORDINATOR_ROLE, realKill, realRuntimes, unloadIdle } from './unload.mjs';
+import { COORDINATOR_RECENT_MS, COORDINATOR_ROLE, UNLOAD, realKill, realRuntimes, unloadIdle } from './unload.mjs';
 
 export { COORDINATOR_RECENT_MS };
 
@@ -60,6 +60,8 @@ export const FINISHED_IDLE_MS = 24 * 3_600_000;
 export const IDLE_LANDED_MS = 2 * 3_600_000;
 export const IDLE_LANDED_PER_PASS = 12;
 export const SESSION_MB = 150;
+/** Under swap pressure, a session this long idle whose only unlanded work sits in the main checkout is archived: the checkout keeps that work, so nothing is lost. */
+export const PRESSURE_MAIN_MS = 24 * 3_600_000;
 const HELD_AGAIN_MS = 30 * 60_000;
 const heldUntil = new Map();
 
@@ -105,7 +107,8 @@ const doArchive = async (d, row, reason, note) => {
 
 // Archives the handed-off and the finished sessions among `listed`. Returns one entry per decision: { what: 'archive' |
 // 'hold', id, name, reason, why, done }. apply: false decides the same and changes nothing.
-export async function retireSessions(listed, d, { apply = false, idleLanded = false } = {}) {
+export async function retireSessions(listed, d, { apply = false, idleLanded = false, swapPct = null } = {}) {
+  const pressure = swapPct !== null && swapPct >= UNLOAD.swapPct;
   const now = d.now();
   const successions = refreshSuccessions(d, listed.map((row) => row.id), { write: apply });
   const byId = new Map(listed.map((row) => [row.id, row]));
@@ -175,11 +178,12 @@ export async function retireSessions(listed, d, { apply = false, idleLanded = fa
     if (apply && looked >= IDLE_LANDED_PER_PASS) break;
     looked += 1;
     const gate = await landedGate(row, d, apply, 'idle-landed', { land: false });
-    if (gate) { heldUntil.set(row.id, now + HELD_AGAIN_MS); entries.push(gate); continue; }
-    const why = `idle ${Math.round((now - quietSince(row)) / 3_600_000)} h${recordedCoordinator(row) ? '' : ', no coordinator'}; ${whereItLeftOff(row, d)}`;
+    const mainOnly = gate?.onDefault && pressure && now - quietSince(row) >= PRESSURE_MAIN_MS;
+    if (gate && !mainOnly) { heldUntil.set(row.id, now + HELD_AGAIN_MS); entries.push(gate); continue; }
+    const why = `idle ${Math.round((now - quietSince(row)) / 3_600_000)} h${recordedCoordinator(row) ? '' : ', no coordinator'}${mainOnly ? `, swap ${swapPct}% full; its folder keeps the changes it has on main (${gate.why})` : ''}; ${whereItLeftOff(row, d)}`;
     if (apply && !(await doArchive(d, row, 'idle-landed', why))) continue;
     gone.add(row.id);
-    entries.push({ what: 'archive', id: row.id, name: row.name, reason: 'idle-landed', done: apply, why });
+    entries.push({ what: 'archive', id: row.id, name: row.name, reason: mainOnly ? 'swap-pressure' : 'idle-landed', done: apply, why });
   }
   return entries;
 }
@@ -216,10 +220,11 @@ export async function watchRetire(d, { apply = false, idleLanded = false } = {})
     return out;
   }
   out.census = census(listed, d.now());
-  try { out.retire = await retireSessions(listed, d, { apply, idleLanded }); } catch (e) { out.errors.push(`retire: ${e.message}`); }
+  let swapPct = null;
+  try { swapPct = await (d.swapPct ? d.swapPct() : realProbes(d).swapPct()); } catch { /* unknown pressure: no pressure duties */ }
+  try { out.retire = await retireSessions(listed, d, { apply, idleLanded, swapPct }); } catch (e) { out.errors.push(`retire: ${e.message}`); }
   try { out.size = (await noticeOversizedSessions(listed, d, { apply })).actions; } catch (e) { out.errors.push(`size watch: ${e.message}`); }
   try {
-    const swapPct = await (d.swapPct ? d.swapPct() : realProbes(d).swapPct());
     const archived = new Set(await archivedIds(d).catch(() => []));
     for (const e of [...out.retire, ...out.size]) if (e.what === 'archive' && (e.done || !apply)) archived.add(e.id);
     out.unload = await unloadIdle({ runtimes: await (d.runtimes ? d.runtimes() : realRuntimes()), listed: listed.filter((row) => !archived.has(row.id)), d, swapPct, apply, archived }, d.kill ?? realKill);
