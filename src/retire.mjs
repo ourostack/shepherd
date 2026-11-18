@@ -61,7 +61,7 @@ export const IDLE_LANDED_MS = 2 * 3_600_000;
 export const IDLE_LANDED_PER_PASS = 12;
 export const SESSION_MB = 150;
 /** Under swap pressure, a session this long idle whose only unlanded work sits in the main checkout is archived: the checkout keeps that work, so nothing is lost. */
-export const PRESSURE_MAIN_MS = 24 * 3_600_000;
+export const PRESSURE_MAIN_MS = 6 * 3_600_000;
 const HELD_AGAIN_MS = 30 * 60_000;
 const heldUntil = new Map();
 
