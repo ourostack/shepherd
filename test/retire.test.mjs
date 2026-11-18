@@ -333,6 +333,21 @@ test('a cloud-hosted session idle over a day is archived with nothing to land, c
   fs.rmSync(home, { recursive: true, force: true });
 });
 
+test('idle-landed: sessions the app refuses to archive do not use up every pass', async () => {
+  const home = tmp('retire-refused-');
+  const app = fakeApp();
+  const refused = new Set();
+  const d = { ...testDeps(home, { app }), ...clean, archive: async (r) => { if (refused.has(r.id)) return false; app.archived.push(r.workspaceId); return true; } };
+  const ids = Array.from({ length: IDLE_LANDED_PER_PASS + 1 }, (_, i) => `${String(i).padStart(2, '0')}${P.slice(2)}`);
+  const listed = ids.map((id, i) => row(id, { ...idle(IDLE_LANDED_MS + 1000 - i), name: `s${i}` }));
+  ids.slice(0, IDLE_LANDED_PER_PASS).forEach((id) => refused.add(id));
+  const first = await retireSessions(listed, d, { apply: true, idleLanded: true });
+  assert.equal(first.filter((x) => x.reason === 'archive-refused').length, IDLE_LANDED_PER_PASS);
+  const second = await retireSessions(listed, d, { apply: true, idleLanded: true });
+  assert.deepEqual(second.filter((x) => x.what === 'archive').map((x) => x.id), [ids[IDLE_LANDED_PER_PASS]]);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
 test('idle-landed: a child idle for days is archived once its coordinator has no working child and made none lately, and unlanded work is held, never landed', async () => {
   const home = tmp('retire-idle-landed-');
   const app = fakeApp();
