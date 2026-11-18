@@ -21,6 +21,8 @@ import { renderQuota, renderReadings } from './quota.mjs';
 import { renderSpend, spend } from './spend.mjs';
 import { runResident, watchDuties } from './resident.mjs';
 import { agentCommands } from './agent-cli.mjs';
+import { session as readSession } from './operate.mjs';
+import { WAIT_FLAGS, isWait, parseDuration, formatDuration, waitFor, waitText } from '../lib/ouro-ui/registry/ouro/ax/wait.ts';
 
 const BUG = 'gh issue create -R ourostack/shepherd --title "shepherd <command>: <what happened>" --body "<the command you ran and this error line>"';
 
@@ -52,6 +54,30 @@ const takes = (verb, values, got, fix) => {
 };
 
 const command = (def) => defineCommand({ ...def, run: (input, ctx) => guard(def.name, () => def.run(input, ctx)) });
+const WAIT_EXIT_NAMES = { satisfied: 'ok', waiting: 'ok', 'timed-out': 'waited', gone: 'error' };
+const activityKey = (s) => `${s.activity?.status ?? ''}|${s.activity?.last_activity ?? ''}`;
+
+// Waits until the session's state or last activity changes: one call instead of a polling loop.
+async function waitOnSession(d, input) {
+  const timeoutMs = input.timeout === undefined ? 60_000 : parseDuration(input.timeout);
+  if (timeoutMs === null) throw usage('watch', `--timeout takes a duration such as 90s or 5m, not "${input.timeout}"`, `shepherd watch ${input.id} --timeout 90s`);
+  const first = await readSession(d, input.id);
+  const ref = { kind: 'session', id: first.id, name: first.name };
+  const resume = (cursor) => ({ command: `shepherd watch ${first.id} --timeout ${formatDuration(timeoutMs)}${cursor ? ` --cursor ${JSON.stringify(cursor)}` : ''}`, why: 'wait again from where this wait ended' });
+  return waitFor({
+    for: `${first.name} to change`, target: ref, cursor: input.cursor ?? null, timeoutMs, intervalMs: 2000, resume,
+    async read(cursor) {
+      const s = await readSession(d, first.id);
+      const now = activityKey(s);
+      const at = s.activity?.last_activity ?? new Date().toISOString();
+      const fresh = { state: 'live', asOf: new Date().toISOString() };
+      if (cursor === null || cursor === now) return { events: [], cursor: now, fresh };
+      return { events: [{ cursor: now, type: 'session-changed', at, by: first.name, target: ref, summary: `${s.activity?.status ?? 'unknown'}${s.activity?.why ? ` (${s.activity.why})` : ''}` }], cursor: now, fresh };
+    },
+    next: () => [{ command: `shepherd session ${first.id}`, why: 'read what it is doing now' }],
+  });
+}
+
 const read = { effect: 'private', readOnly: true };
 
 export const COMMANDS = [
@@ -78,17 +104,23 @@ export const COMMANDS = [
     },
   }),
   command({
-    name: 'watch', summary: 'the health watch over the resumed sessions: one pass, or --every to stay resident; --status shows it', effect: 'private',
+    name: 'watch', summary: 'the health watch over the resumed sessions: one pass, or --every to stay resident; --status shows it; with a session, waits until that session does something', effect: 'private',
+    args: [{ name: 'id', source: 'sessions', description: 'a session to wait on: its whole id, or the first 8 or more characters; it ends when the session\'s activity or state changes, or at --timeout' }],
     flags: {
+      ...WAIT_FLAGS,
       quiet: { type: 'boolean', description: 'print nothing unless something needs saying' },
       status: { type: 'boolean', description: 'what the health watch is following: healthy, waiting, asked again, broken' },
       every: { type: 'number', min: 1, placeholder: '<seconds>', description: 'stay resident: each pass runs the health watch, then the quota balancer, the sidebar tidy, and the retire, wake, stuck-resume and trust duties (each only when its config enables it)' },
     },
-    output: '--status: { watch, counts }; a pass: { action, counts }',
+    output: 'with a session: a wait (wait/1); --status: { watch, counts }; a pass: { action, counts }',
     exit: () => 'ok',
-    text: (r, input) => (r === null ? '' : r.watch !== undefined ? renderWatch(r) : !input.quiet && r.action === 'none' ? 'health watch: nothing to follow yet' : ''),
+    text: (r, input) => (r === null ? '' : isWait(r) ? waitText(r) : r.watch !== undefined ? renderWatch(r) : !input.quiet && r.action === 'none' ? 'health watch: nothing to follow yet' : ''),
     async run(input) {
       const home = copilotHome(input);
+      if (input.id !== undefined) {
+        if (input.every !== undefined || input.status) throw usage('watch', 'a session to wait on cannot be combined with --every or --status', 'shepherd watch <id> --timeout 90s');
+        return waitOnSession(deps({ copilotHome: home }), input);
+      }
       if (input.every !== undefined && input.status) throw usage('watch', '--every and --status cannot be used together', 'shepherd watch --status');
       if (input.status) {
         const r = readWatch(stateDir());
@@ -299,7 +331,8 @@ export const COMMANDS = [
 export const cli = defineCli({
   name: 'shepherd',
   about: ['keeps the flock: the GitHub Copilot app\'s sessions, as work.', 'The agent verbs (sessions … open) take flags, or one JSON object on stdin with --input -.'],
-  exits: defineExitCodes(BASE_EXIT_CODES.map((e) => (e.name === 'error' ? { ...e, meaning: 'error: the app\'s data is unreadable, a history did not restore, the agent did not load, the app refused a sidebar change, or an agent verb was refused; the message says what to do' } : e))),
+  waitExits: WAIT_EXIT_NAMES,
+  exits: defineExitCodes([...BASE_EXIT_CODES, { code: 3, name: 'waited', short: 'waited', meaning: 'waited: nothing happened before --timeout; the output has the command that resumes' }].map((e) => (e.name === 'error' ? { ...e, meaning: 'error: the app\'s data is unreadable, a history did not restore, the agent did not load, the app refused a sidebar change, or an agent verb was refused; the message says what to do' } : e))),
   globalFlags: { 'copilot-home': { type: 'string', placeholder: '<dir>', description: 'the Copilot app\'s data folder (default ~/.copilot)' } },
   commands: COMMANDS,
 });
