@@ -4,6 +4,7 @@
 // recorded with `shepherd place cloud-blocked`. `report` counts where the last days' lanes ran and whether the local ones needed to.
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { realProbes } from './responsiveness.mjs';
 
@@ -12,6 +13,8 @@ export const PLACES = ['cloud', 'mini', 'laptop'];
 const BLOCKS = 'cloud-blocks.json';
 const LOG = 'place-log.jsonl';
 const CONFIG = 'place.json';
+// ~/.config/shepherd/place.json like the other duties' config (SHEPHERD_PLACE_CONFIG overrides it); the state folder's copy is read when that is absent.
+export const placeConfigFile = (env = process.env, home = os.homedir()) => env.SHEPHERD_PLACE_CONFIG || path.join(home, '.config', 'shepherd', CONFIG);
 const HISTORY_READ_BYTES = 40e6;
 
 // Commands and files only the mini has: a lane that touches one of these was right to run here.
@@ -83,7 +86,7 @@ export function decide({ local = false, miniOnly = false, mini, laptop, cloud })
 
 // The laptop heartbeat the config names: { laptop: { gist, file, gh } }, read through the gh CLI. Null when unset or unreadable.
 export function laptopBeat(d) {
-  const cfg = readJson(at(d, CONFIG), {}).laptop;
+  const cfg = (readJson(placeConfigFile(), null) ?? readJson(at(d, CONFIG), {})).laptop;
   if (!cfg?.gist) return Promise.resolve(null);
   return new Promise((resolve) => execFile(cfg.gh || 'gh', ['gist', 'view', cfg.gist, '-f', cfg.file || 'laptop.json'], { timeout: 20000 }, (err, out) => {
     try { resolve(err ? null : JSON.parse(String(out))); } catch { resolve(null); }
