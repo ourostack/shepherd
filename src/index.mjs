@@ -16,3 +16,4 @@ export { resumeStuck, stuckPlan, stuckResumeConfig, stuckResumeFile } from './st
 export { trustAll, trustConfig, trustFile, untrusted } from './trust.mjs';
 export { TARGETS as RESPONSIVENESS_TARGETS, judge as judgeResponsiveness, percentile, readReadings as readResponsiveness, render as renderResponsiveness, sample as sampleResponsiveness } from './responsiveness.mjs';
 export { LIMITS as PLACE_LIMITS, blockCloud, clearCloud, cloudBlocks, decide as decidePlace, laptopState, miniState, place, report as placeReport } from './place.mjs';
+export { AUTO_REASONS as INBOX_REASONS, classify as classifyInboxActor, inboxConfig, inboxFile, inboxStatus, judge as judgeInbox, pollInbox, renderInbox } from './inbox.mjs';

@@ -374,3 +374,18 @@ export function readResponsiveness(deps: Deps, now?: number): ResponsivenessRead
 export function judgeResponsiveness(readings: ResponsivenessReading[], targets?: { appMs: number; gitMs: number; swapPct: number }): ResponsivenessVerdict;
 export function renderResponsiveness(verdict: ResponsivenessVerdict): string;
 export function percentile(values: Array<number | null>, p: number): number | null;
+
+export interface InboxConfig { enabled: boolean; account: string; bots: string[]; keepLabels: string[]; ledger: string | null }
+export interface InboxItem { id: string; repo?: string; title?: string; reason: string; type?: string; rule: string; why: string }
+/** The inbox config from inbox.json (SHEPHERD_INBOX_CONFIG overrides the path). No file: { enabled: false, account: 'arimendelow', … }. */
+export function inboxConfig(file?: string): InboxConfig;
+export function inboxFile(env?: Record<string, string | undefined>, home?: string): string;
+/** The reasons a thread may be marked done: state_change, author, subscribed, ci_activity, review_requested. */
+export const INBOX_REASONS: string[];
+export function classifyInboxActor(user: { login?: string; type?: string } | null | undefined, cfg: Pick<InboxConfig, 'account' | 'bots'>): 'owner' | 'bot' | 'human' | 'unknown';
+/** Decides one notification from the facts fetched for it. Pure: { done, rule, why }. */
+export function judgeInbox(n: object, facts: object | null, cfg: InboxConfig, keep?: string[]): { done: boolean; rule: string; why: string };
+/** One poll of the owner's GitHub notifications; apply: false judges and marks nothing. Marks agent-caused threads done and logs each. */
+export function pollInbox(deps: Deps, cfg: InboxConfig, opts?: { apply?: boolean; force?: boolean; api?: object }): Promise<{ skipped: true; nextAt: number } | { notModified: true; nextAt: number } | { account: string; listed: number; done: InboxItem[]; kept: InboxItem[] }>;
+export function inboxStatus(deps: Deps): { lastModified?: string; nextAt?: number; pollSeconds?: number; counts: Record<string, { markedDone: number; keptNow: number; byReason: Record<string, number>; byRule: Record<string, number>; updatedAt: string }> };
+export function renderInbox(result: object): string;

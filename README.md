@@ -37,6 +37,7 @@ flowchart LR
 | Size watch and hand-off retirement | here now, off until `retire.json` enables it |
 | Stuck resume | here now, off until `stuck-resume.json` enables it |
 | Repository trust | here now, off until `trust.json` enables it |
+| The owner's GitHub inbox | here now, off until `inbox.json` enables it |
 | The six-hour health watch | here now |
 | Billing account and quota | here now |
 | Sidebar tidy | here now |
@@ -160,6 +161,14 @@ Write `~/.config/shepherd/wakes.json`:
 - A session gets one wake at a time: while the last one has not reached its log, the next is held and offered again on the next run. A wake still missing after 30 minutes is taken as lost.
 
 `SHEPHERD_WAKES_CONFIG` overrides the file. `shepherd wakes` shows each runner's last run, wakes delivered and open wakes. `shepherd wakes poll` runs each command now: it sends the wakes only when the config enables them, and otherwise shows what it would send.
+
+## The GitHub inbox
+
+Agents act as the owner's GitHub account, so the owner's notifications inbox fills with what the agents caused: their pull requests merged, an updater's pull request opened, a CI run finished. The inbox duty marks those done, with zero tokens, so what is left is what a person wrote or what is marked ready or done for the owner. It polls with `If-Modified-Since` (a 304 costs nearly no quota) at the interval GitHub names in `X-Poll-Interval`, and looks only at the threads a rule could mark.
+
+A thread is marked done when its reason is `state_change`, `author`, `subscribed` or `ci_activity` on a pull request or issue that the owner's account or a bot wrote, and whose last actor (latest unread comment, else who merged or closed it) is the owner's account, a bot or an updater; or `review_requested` on a bot's pull request (a CODEOWNERS request on an automated update). It is kept when a person other than the owner wrote it, commented on it, merged or closed it, or asked for the review; for any other reason (mention, team mention, comment, assign); when it carries a `ready` or `done` label (`keepLabels`) or is listed in `<state>/inbox-keep.json` (an array of `"owner/repo#n"`); and whenever a lookup fails. Every thread marked done is logged to `<state>/inbox-log.jsonl` with its reason, rule and a one-line why, and the per-day counts (marked done, kept for a person, by reason) go to `<state>/inbox-counts.json` and, when `ledger` is set, to that file for the attention ledger.
+
+Write `~/.config/shepherd/inbox.json` (`SHEPHERD_INBOX_CONFIG` overrides the file): `{ "enabled": true, "account": "arimendelow", "bots": ["some-updater"], "keepLabels": ["ready", "done"], "ledger": "/path/to/shepherd-inbox-counts.json" }`. The token is `SHEPHERD_INBOX_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, or `gh auth token --user <account>`; it needs the `notifications` scope, and the duty refuses a token that is not the account's. `shepherd inbox` shows the counts, `shepherd inbox plan` shows what would be marked done and changes nothing, `shepherd inbox poll` runs a poll now.
 
 ## Repository trust
 
