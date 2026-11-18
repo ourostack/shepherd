@@ -340,3 +340,21 @@ test('the status line shows last run, wakes delivered, open wakes and last error
     'wake runner fresh: not run yet',
   ]);
 });
+
+test('a slow runner does not hold up the others, is not started twice, and every runner keeps its own state', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wakes-slow-'));
+  try {
+    const script = path.join(dir, 'cmd.mjs');
+    fs.writeFileSync(script, `if (process.argv[2] === 'slow') await new Promise((r) => setTimeout(r, 400)); console.log(${JSON.stringify(JSON.stringify({ wakes: [], status: [] }))});`);
+    const runners = ['slow', 'fast'].map((name) => ({ name, command: [process.execPath, script, name], everySeconds: 10 }));
+    const d = { state: dir, now: () => 0 };
+    const due = new Map();
+    assert.deepEqual(Object.keys(await runDueWakes(d, runners, due, 0, 150)), ['fast'], 'the pass returns without waiting for the slow runner');
+    assert.deepEqual(Object.keys(await runDueWakes(d, runners, due, 20000, 150)), ['fast'], 'the slow runner is still going, so it is not started again');
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    const states = readWakeStates(dir);
+    assert.ok(states.slow.lastRunAt && states.fast.lastRunAt, 'both states are in the file');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
