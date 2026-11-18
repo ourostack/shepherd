@@ -25,31 +25,14 @@ import { coordinatorOf } from './coordinator.mjs';
 import { refreshSuccessions, successorOf } from './handoff.mjs';
 import { plain } from './notice.mjs';
 import { archivedIds, rows } from './rows.mjs';
-import { DELIVER_MS, archiveRow, identityId } from './store.mjs';
+import { DELIVER_MS, archiveRow, drainTargets, drainsDir, identityId } from './store.mjs';
 import { deps } from './sessions.mjs';
 import { sendTo } from './socket.mjs';
 import { landedGate } from './landed.mjs';
 import { realProbes } from './responsiveness.mjs';
 import { COORDINATOR_RECENT_MS, COORDINATOR_ROLE, UNLOAD, realKill, realRuntimes, unloadIdle } from './unload.mjs';
 
-export { COORDINATOR_RECENT_MS };
-
-// The sessions Desk's issue drains send their wakes to: each drain's configured session, or the successor Desk recorded for it.
-// A live drain target is never archived, whatever its age; unreadable files mean no targets, never an error.
-export const drainsDir = (env = process.env, home = os.homedir()) => env.DESK_DRAINS_DIR || path.join(env.XDG_STATE_HOME || path.join(home, '.local', 'state'), 'ouroboros-skills', 'desk', 'drains');
-
-export function drainTargets(dir = drainsDir()) {
-  const read = (name) => { try { return JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')); } catch { return null; } };
-  const targets = new Set();
-  const state = read('state.json') ?? {};
-  for (const drain of Array.isArray(read('config.json')?.drains) ? read('config.json').drains : []) {
-    if (typeof drain?.session !== 'string') continue;
-    targets.add(drain.session);
-    const successor = state?.[drain.repo]?.successor;
-    if (successor?.from === drain.session && typeof successor.to === 'string') targets.add(successor.to);
-  }
-  return targets;
-}
+export { COORDINATOR_RECENT_MS, drainTargets, drainsDir };
 
 import { noticeOversizedSessions, whereItLeftOff } from './size-watch.mjs';
 

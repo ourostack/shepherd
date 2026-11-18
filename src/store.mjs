@@ -2,6 +2,7 @@
 // the sessions this agent created (probes, which it may archive) and the questions and plans the app announced (pending).
 // A write that fails is ignored and a read that fails is empty: each is a record, not a gate.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { ALREADY_ARCHIVED, archive, deleteWorkspace } from './socket.mjs';
 
@@ -31,8 +32,27 @@ function appendLog(file, row) {
   } catch { /* the log is best effort */ }
 }
 
+// The sessions Desk's issue drains send their wakes to: each drain's configured session, or the successor Desk recorded for it.
+// A live drain target is never archived, by any duty and whatever its age; unreadable files mean no targets, never an error.
+export const drainsDir = (env = process.env, home = os.homedir()) => env.DESK_DRAINS_DIR || path.join(env.XDG_STATE_HOME || path.join(home, '.local', 'state'), 'ouroboros-skills', 'desk', 'drains');
+
+export function drainTargets(dir = drainsDir()) {
+  const read = (name) => { try { return JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')); } catch { return null; } };
+  const targets = new Set();
+  const state = read('state.json') ?? {};
+  for (const drain of Array.isArray(read('config.json')?.drains) ? read('config.json').drains : []) {
+    if (typeof drain?.session !== 'string') continue;
+    targets.add(drain.session);
+    const successor = state?.[drain.repo]?.successor;
+    if (successor?.from === drain.session && typeof successor.to === 'string') targets.add(successor.to);
+  }
+  return targets;
+}
+
 // Archive through the app, keeping the worktree and compressing the history. Logged when the app confirms. Resolves to ok.
 export async function archiveRow(d, row, reason, note) {
+  // The one door every duty archives through: an issue drain's session stays, whatever asked.
+  if ((d.drainTargets ? d.drainTargets() : drainTargets()).has(row.id)) return false;
   const r = await archive(d, row, { keepWorktree: true });
   if (r.ok) appendLog(statePath(d, 'retireLog'), { at: new Date(d.now()).toISOString(), id: row.id, name: row.name, reason, note });
   // The app refuses to archive a cloud session whose GitHub task is already archived and keeps it listed: drop the entry instead.

@@ -11,7 +11,7 @@ import { claimants, readLineage, readSuccessions, refreshSuccessions, successorO
 import { messagesIn, readTail, TAIL_BYTES } from './history.mjs';
 import { restoreHistory } from './compress.mjs';
 import { readOversize } from './size-watch.mjs';
-import { addProbe, logArchive, readPending, readProbes, removeProbe } from './store.mjs';
+import { addProbe, drainTargets, logArchive, readPending, readProbes, removeProbe } from './store.mjs';
 import { archive } from './socket.mjs';
 import { sendAsPeer } from './peer.mjs';
 import { rows } from './rows.mjs';
@@ -333,6 +333,7 @@ function handedOff(d, row) {
 export async function archiveSession(d, args) {
   const row = findSession(await rows(d), args.session_id);
   const made = readProbes(d);
+  if (args.owner_asked !== true && (d.drainTargets ? d.drainTargets() : drainTargets()).has(row.id)) throw new ShepherdError({ code: 'drain-target', problem: `session ${row.id} is where an issue drain sends its wakes, so it will not archive it`, fix: 'pass --owner-asked only when the owner asked for this session in this conversation' });
   let reason = null;
   if (!made[row.id]) {
     reason = args.owner_asked === true ? 'owner-asked' : handedOff(d, row) ? 'handed-off' : null;
