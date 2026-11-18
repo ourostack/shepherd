@@ -43,6 +43,7 @@ export const DEFAULT_KEEP_LABELS = ['ready', 'done'];
 export const MIN_POLL_SECONDS = 60;
 // Below this many calls left in the hour, the poll waits for the reset: the account's bucket is shared with everything else it runs.
 export const QUOTA_FLOOR = 500;
+const BULK_MIN = 3;
 const LOGIN_TRUST_MS = 6 * 3600 * 1000;
 const MAX_PAGES = 10;
 const API = 'https://api.github.com';
@@ -169,6 +170,11 @@ export function githubApi({ token, fetchFn = globalThis.fetch }) {
         return r.ok ? await r.json() : null;
       } catch { return null; }
     },
+    // One call marks every unread thread of a repository read, up to last_read_at.
+    async readRepo(repo, lastReadAt) {
+      const r = note(await fetchFn(`${API}/repos/${repo}/notifications`, { method: 'PUT', headers: headers({ 'content-type': 'application/json' }), body: JSON.stringify({ last_read_at: lastReadAt, read: true }) }));
+      return r.status === 202 || r.status === 205;
+    },
     async done(id) {
       const r = note(await fetchFn(`${API}/notifications/threads/${id}`, { method: 'DELETE', headers: headers() }));
       return r.status === 204 || r.status === 205 || r.status === 404;
@@ -249,6 +255,17 @@ export async function pollInbox(d, cfg, { apply = true, api, force = false } = {
   const done = [];
   const kept = [];
   let paused = false;
+  // A repository whose unread threads are all workflow-run results (a person wrote none of them) is cleared with one call, not one per thread.
+  const bulk = new Set();
+  if (apply && api.readRepo) {
+    const byRepo = new Map();
+    for (const n of listed.items) { const k = n.repository?.full_name; if (k) byRepo.set(k, [...(byRepo.get(k) ?? []), n]); }
+    const newest = Math.max(...listed.items.map((n) => Date.parse(n.updated_at) || 0), 0);
+    for (const [repo, items] of byRepo) {
+      if (items.length < BULK_MIN || !items.every((n) => n.reason === 'ci_activity' && RUN_SUBJECTS.includes(n.subject?.type))) continue;
+      if (await api.readRepo(repo, new Date(Math.max(newest, ...items.map((n) => Date.parse(n.updated_at) || 0))).toISOString()).catch(() => false)) for (const n of items) bulk.add(n.id);
+    }
+  }
   for (const n of listed.items) {
     // Under the floor mid-pass: leave the rest unread for the next poll rather than spend what the others need.
     if (api.rate && api.rate.remaining < QUOTA_FLOOR) { paused = true; break; }
@@ -260,6 +277,11 @@ export async function pollInbox(d, cfg, { apply = true, api, force = false } = {
       verdict = judge(n, wanted ? await facts(n, api).catch(() => null) : null, cfg, keep);
     }
     if (verdict.done) {
+      if (bulk.has(n.id)) {
+        done.push({ ...row, rule: 'ci-run-bulk', why: 'a workflow-run result, cleared with its repository in one call' });
+        appendLog(d, { at: new Date(now).toISOString(), ...row, rule: 'ci-run-bulk', why: 'cleared in bulk' });
+        continue;
+      }
       if (apply && !(await api.done(n.id).catch(() => false))) { kept.push({ ...row, rule: 'not-done', why: 'GitHub refused to mark it done' }); continue; }
       done.push({ ...row, rule: verdict.rule, why: verdict.why });
       if (apply) appendLog(d, { at: new Date(now).toISOString(), ...row, rule: verdict.rule, why: verdict.why });
