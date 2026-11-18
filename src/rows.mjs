@@ -128,9 +128,9 @@ async function sidebarItems(d) {
   return { workspaces: arr(workspaces.workspaces), chats: arr(chats.sessions) };
 }
 
-// Every session in the app's sidebar (not archived), with its state, what the state rests on, and what its history says it
+// Every session in the app's sidebar (not archived, unless `archived` asks for those too, each marked archived: true), with its state, what the state rests on, and what its history says it
 // waits on. Throws ShepherdError when the app is not serving.
-export async function rows(d, now = d.now()) {
+export async function rows(d, now = d.now(), { archived = false } = {}) {
   const { workspaces, chats } = await sidebarItems(d);
   const out = [];
   const add = (id, row, isRunning) => {
@@ -140,7 +140,7 @@ export async function rows(d, now = d.now()) {
     out.push({ id, ...row, state, detail, lastActivity: facts.lastActivity ?? row.updatedAt, ...(facts.awaiting ? { awaiting: facts.awaiting } : {}), ...(facts.prompt ? { prompt: facts.prompt } : {}) });
   };
   for (const workspace of workspaces) {
-    if (workspace.archivedAt) continue;
+    if (workspace.archivedAt && !archived) continue;
     const session = isRecord(workspace.session) ? workspace.session : {};
     const binding = arr(workspace.checkoutBindings)[0];
     const openPr = arr(workspace.repoContexts).map((c) => (isRecord(c.createdPullRequest) ? c.createdPullRequest : null)).find((pr) => pr && !/^(merged|closed)$/i.test(str(pr.state) ?? ''));
@@ -152,16 +152,18 @@ export async function rows(d, now = d.now()) {
       isRunning: session.isRunning === true, remote: (str(workspace.hostId) ?? 'local') !== 'local' || (str(session.executionLocation) ?? 'local') !== 'local',
       updatedAt: str(session.updatedAt) ?? str(workspace.updatedAt),
       ...(openPr ? { openPullRequest: str(openPr.htmlUrl) ?? `#${String(openPr.number)}` } : {}),
+      ...(workspace.archivedAt ? { archived: true } : {}),
       ...(session.sessionAutomation || workspace.agentMergeEnabled === true ? { automation: true } : {}),
     }, session.isRunning === true);
   }
   for (const chat of chats) {
-    if (chat.archivedAt) continue;
+    if (chat.archivedAt && !archived) continue;
     add(str(chat.id), {
       name: str(chat.title) ?? '(unnamed chat)', kind: 'chat', workspaceId: null, workspaceType: null, project: null, projectId: null, projectRepo: null, branch: null, path: null,
       createdAt: str(chat.createdAt), creatorSessionId: null, coordinatingCreatorSessionId: str(chat.coordinatingCreatorSessionId), parentSessionId: str(chat.parentSessionId),
       wasInterrupted: chat.wasInterrupted === true,
       isRunning: chat.isRunning === true, remote: (str(chat.executionLocation) ?? 'local') !== 'local', updatedAt: str(chat.updatedAt),
+      ...(chat.archivedAt ? { archived: true } : {}),
     }, chat.isRunning === true);
   }
   return out;

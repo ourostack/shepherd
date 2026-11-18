@@ -53,6 +53,7 @@ npx github:ourostack/shepherd#v0.8.1 restore-history <id>  # put back an archive
 npx github:ourostack/shepherd#v0.8.1 retire plan          # what retirement and the size watch would archive, flag or ask
 npx github:ourostack/shepherd#v0.8.1 watch --status        # what the health watch is following
 npx github:ourostack/shepherd#v0.8.1 quota                 # each Copilot account's quota, and the balancer's last tick
+npx github:ourostack/shepherd#v0.8.1 spend                 # which model each coordinator's lanes ran on, this week and today
 npx github:ourostack/shepherd#v0.8.1 sidebar               # which projects the sidebar shows, and what apply would change
 npx github:ourostack/shepherd#v0.8.1 wakes                 # each wake runner's last run and the wakes it delivered
 npx github:ourostack/shepherd#v0.8.1 stuck                 # which stopped sessions a stuck resume would resume
@@ -211,6 +212,8 @@ It is off until you configure it. Write `~/.config/shepherd/quota.json`:
 - `share` (optional): `{ "gist_id": "...", "gh_user": "..." }` reads other machines' readings from a gist.
 
 Files, each overridable by an environment variable: the config (`SHEPHERD_QUOTA_CONFIG`), the balancer's state (`~/.config/shepherd/quota-balance.json`, `SHEPHERD_QUOTA_STATE`), the app's quota broadcasts (`~/.config/shepherd/quota-app.json`, `SHEPHERD_QUOTA_APP`), the list of projects waiting on a person (`~/.config/shepherd/waiting-on-operator.quota.json`, `SHEPHERD_QUOTA_WAITING`) and the decision log (`~/Library/Logs/shepherd-quota.jsonl`, `SHEPHERD_QUOTA_LOG`).
+
+`shepherd spend` (zero tokens, read-only) reports, per coordinator and lane, the model each session ran on over the last 7 days (`--days`) and today, from the histories' `session.usage_record` and `session.model_change` events (archived sessions too): turns, premium weight, the share of lane turns on cheap models (Sonnet, Haiku, mini) versus Opus-class, the lanes with no explicit model (no model choice on record, or auto-selected), and the coordinators whose lanes run half or more of their turns (at least 10) on Opus-class models.
 
 `shepherd quota read` shows each account's quota, `shepherd quota plan` shows what a tick would do now, and `shepherd quota status` shows the last applied tick. None of them change anything.
 

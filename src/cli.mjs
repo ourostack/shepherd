@@ -18,6 +18,7 @@ import { counts, healthDeps, pass, readWatch, renderWatch } from './health-watch
 import { install } from './install.mjs';
 import { blockCloud, clearCloud, place, renderPlace, renderReport, report } from './place.mjs';
 import { renderQuota, renderReadings } from './quota.mjs';
+import { renderSpend, spend } from './spend.mjs';
 import { runResident, watchDuties } from './resident.mjs';
 import { agentCommands } from './agent-cli.mjs';
 
@@ -117,6 +118,16 @@ export const COMMANDS = [
       const cfg = quotaConfig();
       const d = deps({ copilotHome: copilotHome(input) });
       return id === 'read' ? quotaRead(d, cfg) : quotaTick(d, { apply: false, cfg });
+    },
+  }),
+  command({
+    name: 'spend', summary: 'which model each coordinator\'s lanes ran on over the last days and today: turns, premium weight, cheap versus Opus-class share, lanes with no explicit model', ...read,
+    flags: { days: { type: 'number', min: 1, placeholder: '<days>', description: 'the window (default 7)' } },
+    output: '{ window, lanes, coordinators: [{ name, lanes, week, today, flagged, noModel }], flagged, noModel, sessions }',
+    exit: () => 'ok',
+    text: (r) => renderSpend(r),
+    async run(input) {
+      return spend(deps({ copilotHome: copilotHome(input) }), { days: input.days });
     },
   }),
   command({
