@@ -392,3 +392,7 @@ export function pollInbox(deps: Deps, acct: InboxAccount, opts?: { apply?: boole
 export function pollInboxes(deps: Deps, cfg: InboxConfig, opts?: { apply?: boolean; force?: boolean; apis?: Record<string, object> }): Promise<({ account: string; error: string } | { account: string; skipped?: true; notModified?: true; listed?: number; done?: InboxItem[]; kept?: InboxItem[] })[]>;
 export function inboxStatus(deps: Deps, cfg: InboxConfig): { source: 'github-inbox'; accounts: Record<string, { nextAt?: number; days: Record<string, { markedDone: number; keptNow: number; byReason: Record<string, number>; byRule: Record<string, number>; updatedAt: string }> }> };
 export function renderInbox(results: object[]): string;
+
+export function spend(deps: Deps, opts?: { days?: number; now?: number }): Promise<Record<string, any>>;
+export function renderSpend(report: Record<string, any>): string;
+export function tierOf(model: string): 'cheap' | 'expensive' | 'other';
