@@ -5,14 +5,15 @@
 // Cost: one conditional request (If-Modified-Since) per poll, a 304 while nothing changed, at the interval GitHub names in
 // X-Poll-Interval. Only the threads a rule could mark are looked at (their pull request or issue and its latest comment).
 //
-// A thread is marked done only when its reason is one of AUTO_REASONS, it is a pull request or issue, and nobody who is not the
+// A thread is marked done only when its reason is one of AUTO_REASONS or COMMENT_REASONS, it is a pull request or issue, and nobody who is not the
 // owner's account, a bot or an updater acted last (see judge). Anything unknown is kept: a failed lookup never marks done.
 //   ci_activity on a workflow run (CheckSuite)      the run result is the lane's or the red-main route's, never a person's
 //   state_change, author, subscribed, ci_activity   it was written by the owner's account or a bot, and the last actor (latest
 //                                                   unread comment, else who merged or closed it, else its author) is too
+//   comment, mention                                its latest unread comment and its author are the owner's account or a bot
 //   review_requested                                the pull request's author is a bot or an updater: a CODEOWNERS request
 // Kept always: a human other than the owner wrote it, its latest unread comment, or merged or closed it, or authored a
-// review-request pull request; any other reason (mention, team_mention, comment, assign, review_requested by a person…); a thread carrying
+// review-request pull request; any other reason (team_mention, assign, review_requested by a person…); a thread carrying
 // a keep label, or listed in the keep file (`<state>/inbox-keep.json`, an array of "owner/repo#n"), which is how something
 // marked ready or done for the owner stays visible.
 //
@@ -33,6 +34,8 @@ import { readJson, writeJson } from './store.mjs';
 const lower = (s) => String(s ?? '').toLowerCase();
 
 export const AUTO_REASONS = ['state_change', 'author', 'subscribed', 'ci_activity', 'review_requested'];
+/** A comment or mention is a person's only when a person wrote it: one whose latest unread comment is by a bot or the owner's account (on a bot's or the owner's thread) is an agent's event. */
+export const COMMENT_REASONS = ['comment', 'mention'];
 export const SUBJECTS = ['PullRequest', 'Issue'];
 /** A workflow run's notification (ci_activity) is for the lane or the red-main route, never for a person's inbox. */
 export const RUN_SUBJECTS = ['CheckSuite', 'WorkflowRun'];
@@ -90,7 +93,7 @@ const keepKey = (repo, number) => `${repo}#${number}`;
 export function judge(n, facts, cfg, keep = []) {
   const repo = n.repository?.full_name ?? '?';
   const keepIt = (rule, why) => ({ done: false, rule, why });
-  if (!AUTO_REASONS.includes(n.reason)) return keepIt('reason', `reason ${n.reason} is for a person to read`);
+  if (!AUTO_REASONS.includes(n.reason) && !COMMENT_REASONS.includes(n.reason)) return keepIt('reason', `reason ${n.reason} is for a person to read`);
   if (n.reason === 'ci_activity' && RUN_SUBJECTS.includes(n.subject?.type)) return { done: true, rule: 'ci-run', why: `ci_activity: ${n.subject?.title ?? 'a workflow run'} is a run result, which the lane or the red-main route owns` };
   if (!SUBJECTS.includes(n.subject?.type)) return keepIt('subject', `${n.subject?.type ?? 'unknown subject'} is not a pull request or issue`);
   if (!facts) return keepIt('unknown', 'its details could not be read');
@@ -98,6 +101,7 @@ export function judge(n, facts, cfg, keep = []) {
   const label = (facts.labels ?? []).map(lower).find((l) => cfg.keepLabels.includes(l));
   if (label) return keepIt('keep-label', `it is labelled ${label}`);
 
+  if (COMMENT_REASONS.includes(n.reason) && !facts.commentUser) return keepIt('unknown', 'its latest unread comment could not be read');
   const author = classify(facts.author, cfg);
   if (n.reason === 'review_requested') {
     // A request on a person's pull request is a person's ask.
@@ -228,7 +232,7 @@ export async function pollInbox(d, cfg, { apply = true, api, force = false } = {
     const row = { id: n.id, repo: n.repository?.full_name, title: n.subject?.title, reason: n.reason, type: n.subject?.type };
     let verdict = cache[key];
     if (!verdict || verdict.rule === 'unknown') {
-      const wanted = AUTO_REASONS.includes(n.reason) && SUBJECTS.includes(n.subject?.type);
+      const wanted = (AUTO_REASONS.includes(n.reason) || COMMENT_REASONS.includes(n.reason)) && SUBJECTS.includes(n.subject?.type);
       verdict = judge(n, wanted ? await facts(n, api).catch(() => null) : null, cfg, keep);
     }
     if (verdict.done) {
