@@ -131,3 +131,15 @@ test('archive: a failed compress keeps the archive ok; compress: false leaves th
     assert.equal(fs.existsSync(file), true);
   });
 });
+
+test('sendError: the app\'s own words are kept, wherever the reply puts them', async () => {
+  const { sendError } = await import('../src/socket.mjs');
+  const why = "this session can't receive messages because its workspace folder is missing";
+  assert.equal(sendError({ type: 'session_message_sent' }), null);
+  assert.equal(sendError({ type: 'error', message: why }), why);
+  assert.equal(sendError({ type: 'session_message_failed', error: why }), why);
+  assert.equal(sendError({ type: 'session_message_failed', error: { message: why } }), why);
+  assert.equal(sendError({ type: 'session_message_failed', data: { message: why } }), why);
+  assert.equal(sendError({ type: 'error' }), 'the app answered with an error and no text');
+  assert.equal(sendError(undefined), null);
+});

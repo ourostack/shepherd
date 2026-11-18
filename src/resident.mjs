@@ -16,12 +16,20 @@ import { listenPrompts } from './prompts.mjs';
 import { sample as sampleResponsiveness } from './responsiveness.mjs';
 
 // Runs the duties every everyMs until stop() is true. The clock and the sleep are injected, so a test can run it on a fake one.
-export async function runResident({ everyMs, duties, now = () => Date.now(), sleep, stop = () => false, log = () => {} }) {
+// A duty that runs past its limit (`maxMs` on the duty, else DUTY_MAX_MS) is logged and left running in the background, and the pass moves
+// on, so one stuck duty cannot hold up the wake runners behind it. The next pass skips it until it settles, so it never overlaps itself.
+export const DUTY_MAX_MS = 3 * 60000;
+export async function runResident({ everyMs, duties, now = () => Date.now(), sleep, stop = () => false, log = () => {}, dutyMaxMs = DUTY_MAX_MS }) {
+  const running = new Set();
+  const timeboxed = (duty) => new Promise((resolve) => {
+    const limit = duty.maxMs ?? dutyMaxMs;
+    const timer = setTimeout(() => { log(`shepherd: ${duty.name} still running after ${Math.round(limit / 1000)}s; the pass moves on`); resolve(); }, limit);
+    running.add(duty.name);
+    Promise.resolve().then(() => duty.run()).catch((e) => log(`shepherd: ${duty.name} failed: ${e.message}`)).finally(() => { running.delete(duty.name); clearTimeout(timer); resolve(); });
+  });
   while (!stop()) {
     const started = now();
-    for (const duty of duties) {
-      try { await duty.run(); } catch (e) { log(`shepherd: ${duty.name} failed: ${e.message}`); }
-    }
+    for (const duty of duties) if (!running.has(duty.name)) await timeboxed(duty);
     if (stop()) return;
     await sleep(Math.max(0, everyMs - (now() - started)));
   }
@@ -81,6 +89,7 @@ export function watchDuties({ copilotHome, quiet = false, say = () => {}, log = 
     },
     {
       name: 'wake runners',
+      maxMs: 12 * 60000,
       run: async () => {
         const cfg = wakesConfig();
         if (!cfg.enabled || !cfg.runners.length) return;

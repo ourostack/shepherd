@@ -90,3 +90,17 @@ test('the wake runners and the stuck resume do nothing until their configs enabl
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a duty that never settles is logged and skipped, so the duties after it still run every pass and it never overlaps itself', async () => {
+  const ran = [];
+  const logged = [];
+  let stuckStarts = 0;
+  const duties = [
+    { name: 'inbox', maxMs: 20, run: () => { stuckStarts++; return new Promise(() => {}); } },
+    { name: 'wake runners', run: async () => { ran.push('wakes'); } },
+  ];
+  await runResident({ everyMs: 0, duties, sleep: async () => {}, stop: () => ran.length >= 3, log: (line) => logged.push(line) });
+  assert.deepEqual(ran, ['wakes', 'wakes', 'wakes']);
+  assert.equal(stuckStarts, 1, 'the stuck duty is not started again while it is still running');
+  assert.deepEqual(logged, ['shepherd: inbox still running after 0s; the pass moves on']);
+});

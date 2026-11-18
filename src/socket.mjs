@@ -44,6 +44,15 @@ export function exchange(copilotHome, messages, { done = () => false, waitMs = 1
 
 export const appReady = async (deps) => (await deps.exchange([], { done: (j) => j.type === 'server_hello', keep: (j) => j.type === 'server_hello', waitMs: 3000 })).some((j) => j.type === 'server_hello');
 
+// The app's own words for a send that failed: its message, else its error text, else which reply it gave. A success is null.
+export function sendError(last) {
+  if (!last || /^session_message_(sent|queued)$/.test(last.type)) return null;
+  const text = [last.message, last.error?.message, last.error, last.data?.message, last.data?.error, last.reason].find((v) => typeof v === 'string' && v.trim());
+  if (text) return text.trim().slice(0, 200);
+  if (last.type === 'socket_error') return "socket_error: the app's socket refused or dropped the connection";
+  return last.type === 'error' ? 'the app answered with an error and no text' : null;
+}
+
 // Send a prompt to a session; ok when the app queued or sent it. A session whose history was compressed gets it back first.
 // delivery is 'immediate' (the app admits it at the session's next turn boundary) or 'enqueue' (after the current run ends).
 export async function sendTo(deps, id, prompt, waitMs, delivery = 'immediate') {
@@ -61,7 +70,7 @@ export async function sendTo(deps, id, prompt, waitMs, delivery = 'immediate') {
   return {
     ok: Boolean(last && /session_message_(sent|queued)/.test(last.type)),
     reply: last?.type || 'no reply',
-    error: last?.type === 'error' || last?.type === 'socket_error' ? String(last.message || (last.type === 'socket_error' ? 'socket_error: the app\'s socket refused or dropped the connection' : '')).slice(0, 200) : null,
+    error: sendError(last),
   };
 }
 
