@@ -289,3 +289,21 @@ test('a repository of only workflow-run results is cleared with one call; one wi
   assert.ok(mixed.slice(0, 3).every((t) => api.calls.done.includes(t.n.id)), 'the mixed repository falls back to one call per thread');
   assert.ok(r.kept.some((x) => x.reason === 'mention'), 'the person\'s thread is kept');
 });
+
+test('a work account\'s token is read through the gh-work shim when it is installed', async () => {
+  const { tokenCommand } = await import('../src/quota.mjs');
+  const yes = () => true;
+  assert.equal(tokenCommand('github.com', 'someone_microsoft', '/bin/gh-work', yes), '/bin/gh-work');
+  assert.equal(tokenCommand('github.com', 'someone', '/bin/gh-work', yes), 'gh');
+  assert.equal(tokenCommand('github.com', 'someone_microsoft', '/bin/gh-work', () => false), 'gh');
+  const { cachedDirect } = await import('../src/quota.mjs');
+  let n = 0;
+  const cache = new Map();
+  const fetchDirect = async () => ({ n: ++n });
+  const a = { login: 'x_microsoft', host: 'github.com' };
+  await cachedDirect(fetchDirect, a, 0, cache);
+  await cachedDirect(fetchDirect, a, 4 * 60000, cache);
+  assert.equal(n, 1, 'reused inside five minutes');
+  await cachedDirect(fetchDirect, a, 6 * 60000, cache);
+  assert.equal(n, 2);
+});

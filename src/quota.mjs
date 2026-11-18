@@ -189,10 +189,16 @@ export function quotaStall(lines) {
 
 // ---------- readings ----------
 
+// A work account's token comes through the `gh-work` shim when it is installed: the shim counts the hand-out and refuses it under
+// its 500-call floor, so the account's shared hourly bucket is never spent blind.
+export const WORK_LOGIN = /_microsoft$/i;
+export const tokenCommand = (host, login, shim = path.join(os.homedir(), '.local', 'bin', 'gh-work'), exists = fs.existsSync) =>
+  host === 'github.com' && WORK_LOGIN.test(login) && exists(shim) ? shim : 'gh';
+
 function ghToken(host, login) {
   const env = { ...process.env, PATH: PATHS };
   delete env.GH_TOKEN; delete env.GITHUB_TOKEN; delete env.GH_ENTERPRISE_TOKEN;
-  const r = spawnSync('gh', ['auth', 'token', '--hostname', host, '--user', login], { encoding: 'utf8', timeout: 10000, env });
+  const r = spawnSync(tokenCommand(host, login), ['auth', 'token', '--hostname', host, '--user', login], { encoding: 'utf8', timeout: 10000, env });
   const t = (r.stdout || '').trim();
   return r.status === 0 && t ? t : null;
 }
@@ -218,6 +224,18 @@ export function normalize(snap, extra = {}) {
       : (ent != null && rem != null ? ent - rem : snap.credits_used ?? snap.usedRequests) + Number(snap.overage_count ?? snap.overage ?? 0),
     ...extra,
   };
+}
+
+// A reading is reused for DIRECT_TTL_MS: the tick runs every minute, and each live read is a call on the account's shared bucket.
+export const DIRECT_TTL_MS = 5 * 60 * 1000;
+const directCache = new Map();
+export async function cachedDirect(fetchDirect, a, now = Date.now(), cache = directCache) {
+  const k = `${a.login}@${a.host}`;
+  const hit = cache.get(k);
+  if (hit && now - hit.at < (hit.value?.error ? 60000 : DIRECT_TTL_MS)) return hit.value;
+  const value = await fetchDirect(a);
+  cache.set(k, { at: now, value });
+  return value;
 }
 
 async function direct(a) {
@@ -400,7 +418,7 @@ export async function read(d, st, cfg, prev = {}, fetchDirect = direct) {
   const want = st.accounts.filter((a) => a.copilot);
   const errors = {};
   const directs = {};
-  await Promise.all(want.map(async (a) => { const r = await fetchDirect(a); if (r?.error) errors[keyOf(a)] = r.error; else if (r) directs[keyOf(a)] = r; }));
+  await Promise.all(want.map(async (a) => { const r = await cachedDirect(fetchDirect, a); if (r?.error) errors[keyOf(a)] = r.error; else if (r) directs[keyOf(a)] = r; }));
   const app = merge(appFileReadings(), await appBroadcasts(d, st.accounts, cfg.listen_ms));
   let fleet = {};
   let agents = [];
