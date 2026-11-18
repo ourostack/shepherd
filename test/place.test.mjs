@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { LIMITS, blockCloud, clearCloud, cloudState, decide, laptopState, miniState, place, report } from '../src/place.mjs';
+import { LIMITS, blockCloud, clearCloud, cloudState, decide, laptopBeat, laptopState, miniState, place, placeConfigFile, report } from '../src/place.mjs';
 import { fakeHistoryDeps } from './fake-history.mjs';
 import { historyFile } from '../src/index.mjs';
 
@@ -109,4 +109,25 @@ test('report counts lanes by where they ran and coordinator, and splits the loca
   const r = await report(d, { days: 7 });
   assert.deepEqual([r.lanes, r.cloud, r.mini, r.remote, r.neededLocal, r.couldCloud, r.noHistory], [5, 1, 3, 1, 1, 1, 1]);
   assert.deepEqual(r.byCoordinator.map((c) => [c.coordinator, c.cloud, c.mini, c.remote]), [['one', 0, 3, 0], ['two', 1, 0, 1]]);
+});
+
+test('the laptop config is read from ~/.config/shepherd (or SHEPHERD_PLACE_CONFIG), then from the state folder', async () => {
+  const dir = tmp('place-cfg-');
+  const gh = path.join(dir, 'gh');
+  fs.writeFileSync(gh, '#!/bin/sh\necho \'{"interval_sec":600}\'\n', { mode: 0o755 });
+  assert.equal(placeConfigFile({}, '/h'), path.join('/h', '.config', 'shepherd', 'place.json'));
+  const cfg = path.join(dir, 'place.json');
+  assert.equal(placeConfigFile({ SHEPHERD_PLACE_CONFIG: cfg }, '/h'), cfg);
+  const d = { state: dir };
+  const saved = process.env.SHEPHERD_PLACE_CONFIG;
+  try {
+    process.env.SHEPHERD_PLACE_CONFIG = cfg;
+    assert.equal(await laptopBeat(d), null, 'no config anywhere: no laptop');
+    fs.writeFileSync(path.join(dir, 'place.json'), JSON.stringify({ laptop: { gist: 'g', gh } }));
+    assert.deepEqual(await laptopBeat(d), { interval_sec: 600 }, 'the state folder copy still works');
+    fs.writeFileSync(cfg, JSON.stringify({ laptop: { gist: 'g', gh: '/nonexistent' } }));
+    assert.equal(await laptopBeat(d), null, 'the config file wins over the state folder copy');
+  } finally {
+    if (saved === undefined) delete process.env.SHEPHERD_PLACE_CONFIG; else process.env.SHEPHERD_PLACE_CONFIG = saved;
+  }
 });
