@@ -161,6 +161,10 @@ Write `~/.config/shepherd/wakes.json`:
 
 The GitHub Copilot app holds every session in a repository project at "Ask every time" until someone presses the trust button on that project, and it has no setting that trusts them all. The button writes three rows in the app's own database (`project_host_trust`, `project_future_config_trust`, `project_trust_revisions`). Each watch pass writes the same rows, in one SQLite transaction, for every local repository project that lacks them, copying the config hash of a project that is already trusted, and logs each project it trusted. The app reads them live, so a session started afterwards does not wait. Remote projects are left alone. It does nothing until `~/.config/shepherd/trust.json` says `{ "enabled": true }` (`SHEPHERD_TRUST_CONFIG` overrides the file). `shepherd trust` lists the projects it would trust and changes nothing; `shepherd trust apply` trusts them now.
 
+## Responsiveness
+
+Every pass of `shepherd watch --every` takes one reading with no model turns: the load average, how full swap is, how long `git rev-parse HEAD` takes in up to three recent session worktrees, and how long the app's socket takes to say hello. Readings are numbers only (no names, paths or session ids), kept for a day in `responsiveness.jsonl` in the state folder. `shepherd responsiveness` judges them at the 95th percentile against the bar: the app answers in under 2 s, git in under 1 s, swap under 90% full. `shepherd responsiveness read` takes a reading first.
+
 ## Stuck resume
 
 A session whose agent loop stopped (not running, its last turn called tools and no next turn started) is sent one message to carry on, once per stop and at most three times a day. Sessions left alone: idle for over a day, a history over 500 MB (the app loads all of it on resume), remote, or waiting on a person. It does nothing until `~/.config/shepherd/stuck-resume.json` says `{ "enabled": true }` (`SHEPHERD_STUCK_RESUME_CONFIG` overrides the file). `shepherd stuck` lists the stopped sessions and what a resume would do, and changes nothing.

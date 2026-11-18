@@ -12,6 +12,7 @@ import { runCli } from '../lib/ouro-ui/registry/ouro/ax/cli.ts';
 import { AxError } from '../lib/ouro-ui/registry/ouro/ax/problem.ts';
 import { outcome } from '../lib/ouro-ui/registry/ouro/ax/outcome.ts';
 import { ShepherdError, deps, planWakes, quotaConfig, quotaRead, quotaStatus, quotaTick, readWakeStates, rows, restoreHistory, runWakeRunners, runnerDeps, sidebarConfig, sidebarFile, sidebarTidy, renderSidebar, snapshot, stateDir, stuckPlan, stuckResumeConfig, stuckResumeFile, trustAll, trustConfig, trustFile, untrusted, wakeStatusLines, wakesConfig, wakesFile } from './index.mjs';
+import { judge as judgeResponsiveness, readReadings as readResponsiveness, render as renderResponsiveness, sample as sampleResponsiveness } from './responsiveness.mjs';
 import { renderRetire, retireConfig, retireDeps, retireFile, watchRetire } from './retire.mjs';
 import { counts, healthDeps, pass, readWatch, renderWatch } from './health-watch.mjs';
 import { install } from './install.mjs';
@@ -181,6 +182,19 @@ export const COMMANDS = [
       const d = deps({ copilotHome: copilotHome(input) });
       const sessions = stuckPlan(await rows(d), d);
       return withText({ enabled, file, sessions }, lines(!enabled ? `stuck resume is off: ${file} does not say "enabled": true` : null, !sessions.length ? 'no stuck sessions' : null, sessions.map((s) => `${s.resume ? 'would resume' : 'would leave'}  ${s.id.slice(0, 8)}  ${s.name}  (${s.why})`)));
+    },
+  }),
+  command({
+    name: 'responsiveness', summary: 'is the Mac still answering: load, swap, git and app answer times at p95 over the last day against the targets (app under 2 s, git under 1 s); read takes a reading first', effect: 'private',
+    args: [sub('responsiveness', ['status', 'read'], 'status')],
+    output: '{ samples, appP95Ms, gitP95Ms, loadP95, swapP95Pct, ok, misses, reading }',
+    exit: () => 'ok',
+    text: (r) => renderResponsiveness(r),
+    async run(input) {
+      takes('responsiveness', ['status', 'read'], input.action, 'shepherd responsiveness status');
+      const d = deps({ copilotHome: copilotHome(input) });
+      const reading = input.action === 'read' ? await sampleResponsiveness(d) : null;
+      return { ...judgeResponsiveness(readResponsiveness(d)), reading };
     },
   }),
   command({

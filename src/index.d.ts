@@ -365,3 +365,12 @@ export function trustConfig(file?: string): { enabled: boolean };
 export function untrusted(deps: Deps): Promise<{ id: string; name: string }[]>;
 /** Writes the app's trust rows for every untrusted local repository project, in one transaction. Idempotent. */
 export function trustAll(deps: Deps, now?: number): Promise<{ trusted: { id: string; name: string }[]; skipped: string | null }>;
+
+export const RESPONSIVENESS_TARGETS: { appMs: number; gitMs: number; swapPct: number };
+export interface ResponsivenessReading { at: number; load1: number; cores: number; swapPct: number | null; gitMs: number[]; appMs: number | null }
+export interface ResponsivenessVerdict { samples: number; appP95Ms: number | null; gitP95Ms: number | null; loadP95: number | null; swapP95Pct: number | null; ok: boolean; misses: string[] }
+export function sampleResponsiveness(deps: Deps): Promise<ResponsivenessReading>;
+export function readResponsiveness(deps: Deps, now?: number): ResponsivenessReading[];
+export function judgeResponsiveness(readings: ResponsivenessReading[], targets?: { appMs: number; gitMs: number; swapPct: number }): ResponsivenessVerdict;
+export function renderResponsiveness(verdict: ResponsivenessVerdict): string;
+export function percentile(values: Array<number | null>, p: number): number | null;

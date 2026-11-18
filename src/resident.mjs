@@ -12,6 +12,7 @@ import { runDueWakes, wakesConfig } from './wakes.mjs';
 import { resumeStuck, stuckResumeConfig } from './stuck-resume.mjs';
 import { trustAll, trustConfig } from './trust.mjs';
 import { listenPrompts } from './prompts.mjs';
+import { sample as sampleResponsiveness } from './responsiveness.mjs';
 
 // Runs the duties every everyMs until stop() is true. The clock and the sleep are injected, so a test can run it on a fake one.
 export async function runResident({ everyMs, duties, now = () => Date.now(), sleep, stop = () => false, log = () => {} }) {
@@ -25,7 +26,7 @@ export async function runResident({ everyMs, duties, now = () => Date.now(), sle
   }
 }
 
-// The duties of one pass, in order. The prompt tracker's connection starts on the first pass. The balancer's listener starts on the first pass that finds the balancer enabled. The
+// The duties of one pass, in order. The responsiveness reading goes second, so a slow pass shows in its own numbers. The prompt tracker's connection starts on the first pass. The balancer's listener starts on the first pass that finds the balancer enabled. The
 // sidebar tidy runs at most every everyMinutes (sidebar.json), and only when that config is enabled. The retire duty (hand-off
 // retirement, then the size watch) does nothing until its config file says "enabled": true. The wake runners and the stuck
 // resume are off until wakes.json and stuck-resume.json say so; a runner's own cadence is checked on each pass.
@@ -38,6 +39,7 @@ export function watchDuties({ copilotHome, quiet = false, say = () => {}, log = 
   return [
     { name: 'health watch', run: () => pass({}, health, (line) => { if (!quiet) say(line); }) },
     // Holds one observer connection open, so the questions and plans the app announces are heard for answer and plan.
+    { name: 'responsiveness', run: () => sampleResponsiveness(deps({ copilotHome })) },
     { name: 'prompt tracker', run: () => { prompts ??= listenPrompts(deps({ copilotHome })); } },
     {
       name: 'quota balancer',
