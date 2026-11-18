@@ -273,3 +273,19 @@ test('under the quota floor the poll leaves the inbox alone until the reset, and
   await pollInbox(d, cfg, { api });
   assert.equal(users, 1, 'the login was checked once');
 });
+
+test('a repository of only workflow-run results is cleared with one call; one with a person\'s thread is not', async () => {
+  const runs = (repo) => [1, 2, 3].map(() => thread({ reason: 'ci_activity', type: 'CheckSuite', repo, title: 'ci workflow run failed for main branch' }));
+  const d = deps0();
+  const a = runs('o/clean');
+  const mixed = [...runs('o/mixed'), thread({ reason: 'mention', repo: 'o/mixed', author: user('someone') })];
+  const api = fakeGithub([...a, ...mixed]);
+  const reads = [];
+  api.readRepo = async (repo) => { reads.push(repo); return true; };
+  const r = await pollInbox(d, cfg, { api });
+  assert.deepEqual(reads, ['o/clean']);
+  assert.ok(a.every((t) => !api.calls.done.includes(t.n.id)), 'no per-thread call for the cleared repository');
+  assert.equal(r.done.filter((x) => x.rule === 'ci-run-bulk').length, 3);
+  assert.ok(mixed.slice(0, 3).every((t) => api.calls.done.includes(t.n.id)), 'the mixed repository falls back to one call per thread');
+  assert.ok(r.kept.some((x) => x.reason === 'mention'), 'the person\'s thread is kept');
+});
