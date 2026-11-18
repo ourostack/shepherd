@@ -11,7 +11,7 @@ import { BASE_EXIT_CODES, defineExitCodes } from '../lib/ouro-ui/registry/ouro/a
 import { runCli } from '../lib/ouro-ui/registry/ouro/ax/cli.ts';
 import { AxError } from '../lib/ouro-ui/registry/ouro/ax/problem.ts';
 import { outcome } from '../lib/ouro-ui/registry/ouro/ax/outcome.ts';
-import { ShepherdError, deps, inboxConfig, inboxFile, inboxStatus, pollInbox, renderInbox, planWakes, quotaConfig, quotaRead, quotaStatus, quotaTick, readWakeStates, rows, restoreHistory, runWakeRunners, runnerDeps, sidebarConfig, sidebarFile, sidebarTidy, renderSidebar, snapshot, stateDir, stuckPlan, stuckResumeConfig, stuckResumeFile, trustAll, trustConfig, trustFile, untrusted, wakeStatusLines, wakesConfig, wakesFile } from './index.mjs';
+import { ShepherdError, deps, inboxConfig, inboxFile, inboxStatus, pollInboxes, renderInbox, planWakes, quotaConfig, quotaRead, quotaStatus, quotaTick, readWakeStates, rows, restoreHistory, runWakeRunners, runnerDeps, sidebarConfig, sidebarFile, sidebarTidy, renderSidebar, snapshot, stateDir, stuckPlan, stuckResumeConfig, stuckResumeFile, trustAll, trustConfig, trustFile, untrusted, wakeStatusLines, wakesConfig, wakesFile } from './index.mjs';
 import { judge as judgeResponsiveness, readReadings as readResponsiveness, render as renderResponsiveness, sample as sampleResponsiveness } from './responsiveness.mjs';
 import { renderRetire, retireConfig, retireDeps, retireFile, watchRetire } from './retire.mjs';
 import { counts, healthDeps, pass, readWatch, renderWatch } from './health-watch.mjs';
@@ -216,9 +216,9 @@ export const COMMANDS = [
     },
   }),
   command({
-    name: 'inbox', summary: 'the owner\'s GitHub notifications that agents caused: plan shows what would be marked done; poll marks them done now (only when inbox.json says "enabled": true); status shows the counts', effect: 'private',
+    name: 'inbox', summary: 'the owner\'s GitHub notifications (each configured account) that agents caused: plan shows what would be marked done; poll marks them done now (only when inbox.json says "enabled": true); status shows the counts', effect: 'private',
     args: [sub('inbox', ['status', 'plan', 'poll'], 'status')],
-    output: 'status: { nextAt, counts }; plan and poll: { account, listed, done, kept } | { notModified } | { skipped }',
+    output: 'status: { enabled, file, accounts: { <login>: { nextAt, days } } }; plan and poll: { accounts: [{ account, listed, done, kept } | { account, error }] }',
     exit: () => 'ok',
     text: (r) => textOf(r),
     async run(input) {
@@ -228,12 +228,12 @@ export const COMMANDS = [
       const file = inboxFile();
       const cfg = inboxConfig(file);
       if (id === 'status') {
-        const r = { enabled: cfg.enabled, file, ...inboxStatus(d) };
-        return withText(r, lines(!cfg.enabled ? `the inbox duty is off: ${file} does not say "enabled": true` : null, Object.entries(r.counts).map(([day, c]) => `${day}  ${c.markedDone} marked done  ${c.keptNow} kept for a person  ${JSON.stringify(c.byReason)}`)));
+        const r = { enabled: cfg.enabled, file, ...inboxStatus(d, cfg) };
+        return withText(r, lines(!cfg.enabled ? `the inbox duty is off: ${file} does not say "enabled": true` : null, !cfg.accounts.length ? `no accounts in ${file}` : null, Object.entries(r.accounts).flatMap(([acct, a]) => Object.entries(a.days).map(([day, c]) => `${acct}  ${day}  ${c.markedDone} marked done  ${c.keptNow} kept for a person  ${JSON.stringify(c.byReason)}`))));
       }
       if (id === 'poll' && !cfg.enabled) throw usage('inbox', `poll is off, because ${file} does not say "enabled": true`, `set "enabled": true in ${file}, or run shepherd inbox plan`);
-      const r = await pollInbox(d, cfg, { apply: id === 'poll', force: true });
-      return withText(r, renderInbox(r));
+      const r = await pollInboxes(d, cfg, { apply: id === 'poll', force: true });
+      return withText({ accounts: r }, renderInbox(r));
     },
   }),
   command({
