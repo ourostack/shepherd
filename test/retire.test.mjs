@@ -302,7 +302,10 @@ test('idle-landed: never takes a session that works, waits, is recent, has a pul
     'quiet under two hours': [row(ORPHAN, idle(IDLE_LANDED_MS - 60_000))],
     'open pull request': [row(ORPHAN, { ...old, openPullRequest: 'https://github.com/example/project/pull/1' })],
     automation: [row(ORPHAN, { ...old, automation: true })],
-    'remote': [row(ORPHAN, { ...old, remote: true })],
+    'remote, quiet under a day': [row(ORPHAN, { ...old, remote: true })],
+    'remote, running': [row(ORPHAN, { ...working, remote: true })],
+    'remote, waiting': [row(ORPHAN, { ...idle(FINISHED_IDLE_MS + 1), remote: true, state: 'waiting', awaiting: 'input' })],
+    'remote with a pull request': [row(ORPHAN, { ...idle(FINISHED_IDLE_MS + 1), remote: true, openPullRequest: 'https://github.com/example/project/pull/1' })],
     'a working child': [row(ORPHAN, old), kid(working)],
     'a child made in the last day': [row(ORPHAN, old), kid({ createdAt: iso(NOW - COORDINATOR_RECENT_MS + 60_000) })],
     'named for its role': [row(ORPHAN, { ...old, name: 'Desk epoch 3 (2)' }), row(CHILD, { ...old, name: 'the coordinator' }), row(LEAD, { ...old, name: 'ouro ui' })],
@@ -313,6 +316,20 @@ test('idle-landed: never takes a session that works, waits, is recent, has a pul
     assert.ok(!taken.includes(ORPHAN), name);
     if (name === 'named for its role') assert.deepEqual(taken, [], name);
   }
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('a cloud-hosted session idle over a day is archived with nothing to land, coordinated or not; a live coordinator of one stays', async () => {
+  const home = tmp('retire-remote-');
+  const app = fakeApp();
+  const d = { ...testDeps(home, { app }), checkLanded: async () => ({ outcome: 'hold', why: 'no working folder' }) };
+  const old = { ...idle(FINISHED_IDLE_MS + 1), remote: true };
+  const listed = [row(ORPHAN, old), row(CHILD, { ...old, coordinatingCreatorSessionId: GONE }), row(LEAD, { ...old, ...idle(FINISHED_IDLE_MS + 1) })];
+  const e = await retireSessions(listed, d, { apply: true, idleLanded: true });
+  assert.deepEqual(e.filter((x) => x.what === 'archive').map((x) => x.id).sort(), [CHILD, LEAD, ORPHAN].sort());
+  assert.equal(app.archived.length, 3);
+  const e2 = await retireSessions([row(ORPHAN, old), row(CHILD, { ...working, coordinatingCreatorSessionId: ORPHAN })], d, { apply: true, idleLanded: true });
+  assert.deepEqual(e2.filter((x) => x.id === ORPHAN), [], 'a working child keeps its coordinator');
   fs.rmSync(home, { recursive: true, force: true });
 });
 
