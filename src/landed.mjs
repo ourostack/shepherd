@@ -15,9 +15,19 @@ const run = (file, argv, cwd) => new Promise((res) => {
   execFile(file, argv, { cwd, timeout: 120000, maxBuffer: 16 << 20 }, (err, stdout, stderr) => res({ code: err ? (typeof err.code === 'number' ? err.code : 1) : 0, stdout: String(stdout || ''), stderr: String(stderr || '') }));
 });
 
+// The app makes git use its own credential helper, which signs in as the personal account; a work organization's repository
+// then answers "not found". `gh-work` (put on the PATH by the work overlay) runs git or gh as the work account. A repository
+// is the work account's when its owner is a work organization or a work (EMU) user.
+export const WORK_OWNER = /^(gim-home|teams-microsoft|shared-internal-tools)$|_microsoft$/i;
+export const accountFor = (remoteUrl) => {
+  const owner = /github\.com[:/]+(?:[^/@]*@)?([^/]+)\//i.exec(remoteUrl || '')?.[1] ?? /^https?:\/\/(?:[^/@]*@)?[^/]+\/([^/]+)\//i.exec(remoteUrl || '')?.[1];
+  return owner && WORK_OWNER.test(owner) ? 'work' : 'personal';
+};
+const workShim = path.join(os.homedir(), '.local', 'bin', 'gh-work');
+const as = (tool, account) => (account === 'work' && fs.existsSync(workShim) ? [workShim, tool === 'git' ? ['git'] : []] : [tool, []]);
 export const landDeps = () => ({
-  git: (cwd, args) => run('git', args, cwd),
-  gh: (cwd, args) => run('gh', args, cwd),
+  git: (cwd, args, account) => { const [bin, pre] = as('git', account); return run(bin, [...pre, ...args], cwd); },
+  gh: (cwd, args, account) => { const [bin, pre] = as('gh', account); return run(bin, [...pre, ...args], cwd); },
   exists: (p) => fs.existsSync(p),
 });
 
@@ -26,13 +36,16 @@ const out = (r) => r.stdout.trim();
 const hold = (why) => ({ outcome: 'hold', why });
 
 export async function checkLanded(row, d) {
-  const ld = d.landDeps ?? landDeps();
+  const raw = d.landDeps ?? landDeps();
+  let ld = raw;
   if (row.kind === 'chat') return { outcome: 'clean', why: 'a chat has no working folder' };
   const cwd = folderOf(row);
   if (!cwd) return hold('no working folder is recorded for it, so its work cannot be checked');
   if (!ld.exists(cwd)) return hold(`its working folder ${cwd} is gone, so its work cannot be checked`);
   const inside = await ld.git(cwd, ['rev-parse', '--is-inside-work-tree']);
   if (inside.code !== 0) return hold(`${cwd} is not a git working folder`);
+  const account = accountFor(out(await ld.git(cwd, ['remote', 'get-url', 'origin'])));
+  ld = { ...raw, git: (c, a) => raw.git(c, a, account), gh: (c, a) => raw.gh(c, a, account) };
   if ((await ld.git(cwd, ['fetch', '-q', 'origin'])).code !== 0) return hold('git could not fetch origin, so what is on main cannot be confirmed');
   const head = await ld.git(cwd, ['symbolic-ref', '--short', '-q', 'HEAD']);
   const branch = out(head);
@@ -49,7 +62,7 @@ export async function checkLanded(row, d) {
   const hasRemote = (await ld.git(cwd, ['rev-parse', '--verify', '-q', `origin/${branch}`])).code === 0;
   const unpushed = hasRemote ? await count(`origin/${branch}..HEAD`) : ahead;
   if (unpushed === null) return hold('git could not count its unpushed commits');
-  const base = { cwd, branch, sha, def, dirty, unpushed, ahead };
+  const base = { cwd, branch, sha, def, dirty, unpushed, ahead, account };
   if (branch === def) {
     if (dirty || ahead > 0) return { ...base, ...hold(`it has ${dirty ? 'uncommitted changes' : ''}${dirty && ahead > 0 ? ' and ' : ''}${ahead > 0 ? `${ahead} unpushed commit(s)` : ''} on ${def} itself, which cannot be landed by a pull request`) };
     return { ...base, outcome: 'clean', why: `clean on ${def}` };
@@ -70,7 +83,8 @@ export async function checkLanded(row, d) {
 
 // Lands what `check` found: commit, push, pull request, auto-merge. Returns { ok, url } or { ok: false, why }.
 export async function land(found, d) {
-  const ld = d.landDeps ?? landDeps();
+  const raw = d.landDeps ?? landDeps();
+  const ld = { ...raw, git: (c, a) => raw.git(c, a, found.account), gh: (c, a) => raw.gh(c, a, found.account) };
   const { cwd, branch } = found;
   const fail = (why) => ({ ok: false, why });
   if (found.dirty) {

@@ -166,3 +166,16 @@ export async function rows(d, now = d.now()) {
   }
   return out;
 }
+
+// The ids of the sessions the app has archived, which hold no runtime.
+export async function archivedIds(d) {
+  const { workspaces, chats } = await sidebarItems(d);
+  const ids = [];
+  for (const workspace of workspaces) {
+    const session = isRecord(workspace.session) ? workspace.session : {};
+    const id = str(session.sessionId) ?? str(workspace.activeSessionId);
+    if (workspace.archivedAt && id) ids.push(id);
+  }
+  for (const chat of chats) if (chat.archivedAt && str(chat.id)) ids.push(str(chat.id));
+  return ids;
+}

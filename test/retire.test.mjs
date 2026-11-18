@@ -155,7 +155,7 @@ test('a pass that cannot list the app changes nothing and says why', async () =>
 
 // ---------- the landed gate: nothing is archived while its work is not on main ----------
 
-import { checkLanded, land } from '../src/landed.mjs';
+import { accountFor, checkLanded, land } from '../src/landed.mjs';
 
 // A scripted git and gh: each call is matched by its arguments, and every call is kept.
 function scripted(answers) {
@@ -335,4 +335,17 @@ test('census counts sessions by state and age, coordinated or not, and the memor
   const h = 3600_000;
   const c = census([row(LEAD, working), row(ORPHAN, { ...idle(h), coordinatingCreatorSessionId: LEAD }), row(CHILD, idle(5 * h)), row(P, idle(30 * h)), row(S, { ...idle(5 * h), coordinatingCreatorSessionId: GONE })], NOW);
   assert.deepEqual(c, { total: 5, running: 1, idleUnder2h: 1, idle2to24h: 2, idleOver24h: 1, coordinated: 1, orphans: 4, remote: 0, idleMemoryMb: 600 });
+});
+
+test('landed check: a work organization or work user repository is fetched and listed as the work account, a personal one is not, and a failed fetch is never landed', async () => {
+  assert.deepEqual(['https://github.com/gim-home/CIT.git', 'https://arimendelow_microsoft@github.com/arimendelow_microsoft/desk.git', 'https://github.com/teams-microsoft/x', 'git@github.com:shared-internal-tools/y.git', 'https://github.com/ourostack/shepherd.git', 'git@github.com:arimendelow/desk.git', ''].map(accountFor), ['work', 'work', 'work', 'work', 'personal', 'personal', 'personal']);
+  const accounts = [];
+  const s = scripted({ ...REPO, 'git remote get-url origin': 'https://github.com/gim-home/CIT.git' });
+  const as = (tool) => async (cwd, args, account) => { accounts.push(`${tool} ${args[0]} ${account}`); return s.landDeps[tool](cwd, args); };
+  const found = await checkLanded(wsRow(), { landDeps: { ...s.landDeps, git: as('git'), gh: as('gh') } });
+  assert.equal(found.account, 'work');
+  assert.ok(accounts.some((a) => a === 'git fetch work') && accounts.some((a) => a === 'gh pr work'), accounts.join(', '));
+  assert.ok(!accounts.some((a) => a.endsWith('personal')));
+  const failed = scripted({ ...REPO, 'git fetch': { code: 1 }, 'git remote get-url origin': 'https://github.com/gim-home/CIT.git' });
+  assert.equal((await checkLanded(wsRow(), { landDeps: failed.landDeps })).outcome, 'hold');
 });
