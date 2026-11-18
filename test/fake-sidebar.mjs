@@ -9,21 +9,24 @@ export const NOW = Date.parse('2026-11-16T16:00:00Z');
 export const iso = (ms) => new Date(ms).toISOString();
 
 // An app that answers the sidebar list, send_message and the two archives. Every request is kept in sent and archived.
-export function fakeApp({ workspaces = [], chats = [] } = {}) {
+export function fakeApp({ workspaces = [], chats = [], alreadyArchived = [] } = {}) {
   const sent = [];
   const archived = [];
+  const deleted = [];
   const exchange = async (messages) => {
     const out = [];
     for (const m of messages) {
       if (m.type === 'list_workspaces') out.push({ type: 'workspace_list', workspaces });
       else if (m.type === 'list_general_chat_sessions') out.push({ type: 'general_chat_sessions_list', sessions: chats });
       else if (m.type === 'send_message') { sent.push({ id: m.session_id, text: m.prompt }); out.push({ type: 'session_message_sent', request_id: m.request_id }); }
+      else if (m.type === 'archive_workspace' && alreadyArchived.includes(m.workspace_id)) out.push({ type: 'error', request_id: m.request_id, message: 'Failed to archive workspace: github API request failed (409): task is already archived' });
+      else if (m.type === 'delete_workspace') { deleted.push(m.workspace_id); out.push({ type: 'workspace_deleted', request_id: m.request_id }); }
       else if (m.type === 'archive_workspace') { archived.push(m.workspace_id); out.push({ type: 'workspace_archived', request_id: m.request_id }); }
       else if (m.type === 'archive_session') { archived.push(m.session_id); out.push({ type: 'general_chat_sessions_changed' }); }
     }
     return out;
   };
-  return { exchange, sent, archived };
+  return { exchange, sent, archived, deleted };
 }
 
 // Shepherd's deps over a temp home and state folder: the app is `app`, the clock is `now`, and the history gzip and the

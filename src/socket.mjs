@@ -77,6 +77,18 @@ export async function sendTo(deps, id, prompt, waitMs, delivery = 'immediate') {
 // Archive a session row from snapshot or the sessions query. A row with a workspace archives the workspace, and deletes
 // its worktree only when the row says it is one and keepWorktree is not set; a row without one archives the session.
 // Once the app confirms, the session's history is compressed (after the app's database shows it archived).
+// Removes a cloud session's sidebar entry. Used only when the app's archive says the GitHub task is already archived (409) and
+// leaves the row listed; the archived task on GitHub is untouched. Not reversible in the app.
+export async function deleteWorkspace(deps, row, { waitMs = ARCHIVE_WAIT_MS } = {}) {
+  if (!row.workspaceId) return { ok: false, error: 'no workspace to delete' };
+  const request_id = randomUUID();
+  const got = await deps.exchange([{ type: 'delete_workspace', workspace_id: row.workspaceId, request_id }], { keep: (j) => j.request_id === request_id || j.type === 'socket_error', done: (j) => j.request_id === request_id || j.type === 'socket_error', waitMs });
+  const hit = got.find((j) => j.request_id === request_id || j.type === 'socket_error');
+  return { ok: hit?.type === 'workspace_deleted', error: hit?.type === 'workspace_deleted' ? null : hit ? String(hit.message || hit.type).slice(0, 200) : 'the app did not confirm the delete' };
+}
+
+export const ALREADY_ARCHIVED = /already archived/i;
+
 export async function archive(deps, row, { keepWorktree = false, waitMs = ARCHIVE_WAIT_MS, compress = true } = {}) {
   if (row.id === identityId(deps)) return { ok: false, error: "Ouroboros' own chat is the sender of its peer messages and is never archived" };
   const request_id = randomUUID();
