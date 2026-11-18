@@ -85,11 +85,14 @@ test('place reads the probes, answers, and keeps a one-line record', async () =>
   const probes = { loadavg: () => [60, 50, 40], cores: () => 18, swapPct: async () => 97, laptop: async () => beat() };
   const r = await place(d, { repo: 'o/a', local: true }, probes);
   assert.equal(r.place, 'laptop');
+  assert.equal(r.start.route, 'hub');
+  assert.match(r.start.command, /session laptop open/);
   assert.deepEqual(r.mini, { swapPct: 97, load1: 60, cores: 18, loaded: true, why: 'swap 97% full, load 60 on 18 cores' });
   const log = fs.readFileSync(path.join(d.state, 'place-log.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
   assert.deepEqual(log.map((l) => [l.place, l.repo]), [['laptop', 'o/a']]);
   const cloud = await place(d, {}, probes);
   assert.equal(cloud.place, 'cloud');
+  assert.equal(cloud.start, undefined);
 });
 
 test('report counts lanes by where they ran and coordinator, and splits the local ones by what they touched', async () => {

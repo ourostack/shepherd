@@ -257,7 +257,7 @@ export const COMMANDS = [
       minutes: { type: 'number', min: 1, placeholder: '<minutes>', description: 'cloud-blocked: how long the 403 window lasts (60 by default)' },
       days: { type: 'number', min: 1, placeholder: '<days>', description: 'report: how many days back (7 by default)' },
     },
-    output: 'ask: { place, why, repo, local, miniOnly, mini, laptop, cloud }; report: { days, lanes, cloud, mini, remote, neededLocal, couldCloud, noHistory, byCoordinator, placements }; cloud-blocked: { until, repo }',
+    output: 'ask: { place, why, repo, local, miniOnly, mini, laptop, cloud, start (laptop only: { route, hub, command }) }; report: { days, lanes, cloud, mini, remote, neededLocal, couldCloud, noHistory, byCoordinator, placements }; cloud-blocked: { until, repo }',
     exit: () => 'ok',
     text: (r) => textOf(r),
     async run(input) {

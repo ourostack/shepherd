@@ -181,7 +181,7 @@ The GitHub Copilot app holds every session in a repository project at "Ask every
 
 `shepherd place [--repo <owner/name>] [--local] [--mini-only]` answers `cloud`, `mini` or `laptop` with a one-line reason, for a lane about to start. Cloud is the default; `--local` says the lane needs local tools or state, so it goes to this Mac while it has room (swap under 90%, load under 1.5 per core, 10 GB free) and to the laptop when this Mac is loaded and the laptop's heartbeat is fresh; `--mini-only` always answers mini. `shepherd place cloud-blocked [--minutes N]` records a cloud 403 so lanes stay local for that window, and `shepherd place cloud-open` clears it. `shepherd place report [--days N]` counts where the app's lanes ran, by coordinator, and how many local ones touched mini-only state. Each answer is logged to `~/Library/Caches/shepherd/place-log.jsonl`.
 
-The laptop is known by its heartbeat, a gist file read through the gh CLI. Write `~/.config/shepherd/place.json` (`SHEPHERD_PLACE_CONFIG` overrides it): `{ "laptop": { "gist": "<gist id>", "file": "laptop.json", "gh": "gh" } }`. With no file the laptop is never offered.
+The laptop is known by its heartbeat, a gist file read through the gh CLI. Write `~/.config/shepherd/place.json` (`SHEPHERD_PLACE_CONFIG` overrides it): `{ "laptop": { "gist": "<gist id>", "file": "laptop.json", "gh": "gh" } }`. With no file the laptop is never offered. When the answer is `laptop`, `start` gives the Agency Hub command to run the lane there (`mac session laptop open <cwd> '<prompt>'`), because the app's `create_session` `remote_host_id` cannot target a Mac that is not on a reachable network. Add `"hub"` (the laptop's Hub device id), `"cwd"` and `"mac"` to the `laptop` entry to fill it in.
 
 ## Responsiveness
 
