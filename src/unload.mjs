@@ -1,13 +1,16 @@
 // Under swap pressure, free the memory of idle sessions without archiving them. Each session runtime (one process the app
 // starts per session, or one shared by a coordinator and the sessions it created) carries its own MCP servers and extensions,
-// roughly 150 MB per hosted session. A runtime whose hosted sessions are all long idle, with their work on main, is stopped;
+// roughly 150 MB per hosted session. A runtime whose hosted sessions are all archived, or long idle with their work on main, is stopped;
 // sending the session a message makes the app load it again, so nothing is lost. A runtime that hosts any running, recent,
 // waiting, automated or unlanded session, or one coordinating a session that works, is left alone. Runs inside the retire
 // duty, so it does nothing until retire.json enables it.
 import { execFile } from 'node:child_process';
 import { landedGate } from './landed.mjs';
 
-export const UNLOAD = { swapPct: 85, idleMs: 2 * 3600000, perPass: 2 };
+export const UNLOAD = { swapPct: 85, idleMs: 2 * 3600000, perPass: 6 };
+/** A session that made another within this long is a live coordinator, whatever its children are doing now. */
+export const COORDINATOR_RECENT_MS = 24 * 3_600_000;
+export const COORDINATOR_ROLE = /coordinator|ouro ui|desk epoch|orchestrat/i;
 const SESSION_ENV = /COPILOT_AGENT_SESSION_ID=([0-9a-f-]{36})/;
 
 const quietSince = (row) => Math.max(Date.parse(row.lastActivity ?? '') || 0, Date.parse(row.updatedAt ?? '') || 0);
@@ -20,13 +23,16 @@ export function holdReason(row, listed, now, t = UNLOAD) {
   if (row.automation) return 'it has an automation';
   if (row.openPullRequest) return 'it has an open pull request';
   if (now - quietSince(row) < t.idleMs) return 'it was active in the last 2 hours';
-  const kids = listed.filter((c) => (c.coordinatingCreatorSessionId ?? c.parentSessionId) === row.id);
+  const kids = listed.filter((c) => (c.coordinatingCreatorSessionId ?? c.parentSessionId) === row.id || c.creatorSessionId === row.id);
   if (kids.some((c) => c.isRunning || c.state === 'busy')) return 'a session it coordinates is working';
+  if (COORDINATOR_ROLE.test(row.name ?? '')) return 'it is named for a coordinator role';
+  if (kids.some((c) => now - (Date.parse(c.createdAt ?? '') || 0) < COORDINATOR_RECENT_MS)) return 'it created a session in the last day';
   return null;
 }
 
 // Plan: which runtimes would be stopped now. `runtimes`: [{ pid, rssMb, sessions: [id] }].
-export async function planUnload({ runtimes, listed, d, swapPct, now = d.now(), t = UNLOAD, apply = false }) {
+// `archived`: ids the app has archived. An archived session needs no runtime, so it does not hold one.
+export async function planUnload({ runtimes, listed, d, swapPct, now = d.now(), t = UNLOAD, apply = false, archived = new Set() }) {
   if (swapPct === null || swapPct < t.swapPct) return { pressure: false, swapPct, stop: [], keep: [] };
   const byId = new Map(listed.map((r) => [r.id, r]));
   const stop = [];
@@ -36,6 +42,7 @@ export async function planUnload({ runtimes, listed, d, swapPct, now = d.now(), 
     if (!rt.sessions.length) why = 'no hosted session is known';
     for (const id of rt.sessions) {
       if (why) break;
+      if (archived.has(id) && !byId.has(id)) continue;
       const row = byId.get(id);
       if (!row) { why = 'a hosted session is not in the sidebar'; break; }
       why = holdReason(row, listed, now, t);

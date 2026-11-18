@@ -15,10 +15,11 @@ test('nothing is stopped below the swap threshold', async () => {
   assert.deepEqual(p.stop, []);
 });
 
-test('a long-idle landed session is stopped, largest runtime first, at most two a pass', async () => {
-  const listed = ['a', 'b', 'c'].map((id) => row(id));
-  const p = await planUnload({ runtimes: [rt(1, ['a'], 900), rt(2, ['b'], 1500), rt(3, ['c'], 1200)], listed, d: d(), swapPct: 95 });
-  assert.deepEqual(p.stop.map((s) => s.pid), [2, 3]);
+test('a long-idle landed session is stopped, largest runtime first, at most six a pass', async () => {
+  const ids = ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
+  const listed = ids.map((id) => row(id));
+  const p = await planUnload({ runtimes: ids.map((id, i) => rt(i + 1, [id], 900 + i * 100)), listed, d: d(), swapPct: 95 });
+  assert.deepEqual(p.stop.map((s) => s.pid), [7, 6, 5, 4, 3, 2]);
 });
 
 test('working, waiting, recent, automated, remote and open-PR sessions keep their runtime', () => {
@@ -74,4 +75,20 @@ test('a runtime hosts the sessions found in the environment of its descendants, 
   assert.equal(r.pid, 10);
   assert.equal(r.rssMb, 2);
   assert.deepEqual(r.sessions.sort(), [a, b]);
+});
+
+test('an archived session holds no runtime: a runtime whose sessions are all archived or idle and landed is stopped, one hosting an unknown session is not', async () => {
+  const archived = new Set(['x', 'y']);
+  const base = { listed: [row('a')], d: d(), swapPct: 95, archived };
+  assert.deepEqual((await planUnload({ ...base, runtimes: [rt(1, ['x', 'y'])] })).stop.map((s) => s.pid), [1]);
+  assert.deepEqual((await planUnload({ ...base, runtimes: [rt(2, ['x', 'a'])] })).stop.map((s) => s.pid), [2]);
+  assert.equal((await planUnload({ ...base, runtimes: [rt(3, ['x', 'zz'])] })).stop.length, 0, 'an unknown session is not an archived one');
+  const live = { ...base, listed: [row('a', { lastActivity: hoursAgo(0.1), updatedAt: hoursAgo(0.1) })] };
+  assert.equal((await planUnload({ ...live, runtimes: [rt(4, ['x', 'a'])] })).stop.length, 0, 'a recent session keeps it');
+});
+
+test('a coordinator named for its role, or one that made a session in the last day, keeps its runtime; a working child keeps it too', async () => {
+  assert.match(holdReason(row('a', { name: 'Desk epoch 3 (2)' }), [], NOW), /coordinator role/);
+  assert.match(holdReason(row('a'), [row('b', { creatorSessionId: 'a', createdAt: hoursAgo(3) })], NOW), /last day/);
+  assert.equal(holdReason(row('a'), [row('b', { creatorSessionId: 'a', createdAt: hoursAgo(40) })], NOW), null);
 });

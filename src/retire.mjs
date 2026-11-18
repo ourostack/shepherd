@@ -23,13 +23,15 @@ import { tellAgent } from './health-watch.mjs';
 import { coordinatorOf } from './coordinator.mjs';
 import { refreshSuccessions, successorOf } from './handoff.mjs';
 import { plain } from './notice.mjs';
-import { rows } from './rows.mjs';
+import { archivedIds, rows } from './rows.mjs';
 import { DELIVER_MS, archiveRow, identityId } from './store.mjs';
 import { deps } from './sessions.mjs';
 import { sendTo } from './socket.mjs';
 import { landedGate } from './landed.mjs';
 import { realProbes } from './responsiveness.mjs';
-import { realKill, realRuntimes, unloadIdle } from './unload.mjs';
+import { COORDINATOR_RECENT_MS, COORDINATOR_ROLE, realKill, realRuntimes, unloadIdle } from './unload.mjs';
+
+export { COORDINATOR_RECENT_MS };
 import { noticeOversizedSessions, whereItLeftOff } from './size-watch.mjs';
 
 export const HANDOFF_QUIET_MS = 5 * 60_000;
@@ -38,11 +40,8 @@ export const FINISHED_IDLE_MS = 24 * 3_600_000;
 
 /** Two hours: long enough that the person is not about to come back, short enough to free memory the same day. */
 export const IDLE_LANDED_MS = 2 * 3_600_000;
-/** A session that made another within this long is a live coordinator, whatever its children are doing now. */
-export const COORDINATOR_RECENT_MS = 24 * 3_600_000;
 export const IDLE_LANDED_PER_PASS = 12;
 export const SESSION_MB = 150;
-const COORDINATOR_ROLE = /coordinator|ouro ui|desk epoch|orchestrat/i;
 const HELD_AGAIN_MS = 30 * 60_000;
 const heldUntil = new Map();
 
@@ -197,7 +196,9 @@ export async function watchRetire(d, { apply = false, idleLanded = false } = {})
   try { out.size = (await noticeOversizedSessions(listed, d, { apply })).actions; } catch (e) { out.errors.push(`size watch: ${e.message}`); }
   try {
     const swapPct = await (d.swapPct ? d.swapPct() : realProbes(d).swapPct());
-    out.unload = await unloadIdle({ runtimes: await (d.runtimes ? d.runtimes() : realRuntimes()), listed, d, swapPct, apply }, d.kill ?? realKill);
+    const archived = new Set(await archivedIds(d).catch(() => []));
+    for (const e of [...out.retire, ...out.size]) if (e.what === 'archive' && (e.done || !apply)) archived.add(e.id);
+    out.unload = await unloadIdle({ runtimes: await (d.runtimes ? d.runtimes() : realRuntimes()), listed: listed.filter((row) => !archived.has(row.id)), d, swapPct, apply, archived }, d.kill ?? realKill);
   } catch (e) { out.errors.push(`idle runtimes: ${e.message}`); }
   return out;
 }
