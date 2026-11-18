@@ -59,17 +59,31 @@ const run = (cmd, argv) => new Promise((resolve, reject) => execFile(cmd, argv, 
 
 // The session runtimes and the sessions each hosts, found from the environment of the processes it starts.
 export async function realRuntimes() {
-  const out = await run('/bin/ps', ['-axeww', '-o', 'pid=,ppid=,rss=,command=']);
+  return parseRuntimes(await run('/bin/ps', ['eww', '-axo', 'pid=,ppid=,rss=,command=']));
+}
+
+// `ps eww` lines: pid, ppid, rss in KB, then the command and its environment.
+export function parseRuntimes(out) {
   const rts = new Map();
   const kids = [];
+  const parent = new Map();
   for (const line of out.split('\n')) {
     const m = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/.exec(line);
     if (!m) continue;
     const [, pid, ppid, rss, cmd] = m;
     if (/copilot-runtime\b/.test(cmd.split(' ')[0]) && /--server/.test(cmd)) rts.set(Number(pid), { pid: Number(pid), rssMb: Math.round(Number(rss) / 1024), sessions: new Set() });
-    else kids.push({ ppid: Number(ppid), id: SESSION_ENV.exec(cmd)?.[1] });
+    parent.set(Number(pid), Number(ppid));
+    const id = SESSION_ENV.exec(cmd)?.[1];
+    if (id) kids.push({ pid: Number(pid), id });
   }
-  for (const k of kids) if (k.id) rts.get(k.ppid)?.sessions.add(k.id);
+  // An MCP server may sit under a wrapper, so walk up to the runtime that owns it.
+  for (const k of kids) {
+    let at = k.pid;
+    for (let hops = 0; at && hops < 12; hops++) {
+      if (rts.has(at)) { rts.get(at).sessions.add(k.id); break; }
+      at = parent.get(at);
+    }
+  }
   return [...rts.values()].map((r) => ({ ...r, sessions: [...r.sessions] }));
 }
 

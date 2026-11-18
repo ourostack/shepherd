@@ -58,3 +58,20 @@ test('a plan kills nothing; apply kills the chosen runtimes', async () => {
   assert.deepEqual(killed, [7]);
   assert.equal(r.stop[0].done, true);
 });
+
+test('a runtime hosts the sessions found in the environment of its descendants, through wrappers', async () => {
+  const { parseRuntimes } = await import('../src/unload.mjs');
+  const a = '11111111-1111-1111-1111-111111111111';
+  const b = '22222222-2222-2222-2222-222222222222';
+  const out = [
+    ' 10 1 2048 /x/copilot-runtime --server --stdio HOME=/h',
+    ` 11 10 100 node mcp COPILOT_AGENT_SESSION_ID=${a}`,
+    ' 12 10 100 wrapper',
+    ` 13 12 100 node mcp COPILOT_AGENT_SESSION_ID=${b}`,
+    ` 14 1 100 node other COPILOT_AGENT_SESSION_ID=${b}`,
+  ].join('\n');
+  const [r] = parseRuntimes(out);
+  assert.equal(r.pid, 10);
+  assert.equal(r.rssMb, 2);
+  assert.deepEqual(r.sessions.sort(), [a, b]);
+});
