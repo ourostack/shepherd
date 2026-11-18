@@ -253,3 +253,23 @@ test('classify and config', () => {
 test('judge keeps a thread with no facts', () => {
   assert.equal(judge({ reason: 'subscribed', subject: { type: 'PullRequest' } }, null, cfg).done, false);
 });
+
+test('under the quota floor the poll leaves the inbox alone until the reset, and the login is not re-read every poll', async () => {
+  const d = deps0();
+  const ts = [thread({ reason: 'subscribed' }), thread({ reason: 'subscribed' })];
+  const api = fakeGithub(ts);
+  let users = 0;
+  const json = api.json;
+  api.json = async (u) => { if (u === '/user') users++; return json(u); };
+  const done = api.done;
+  api.done = async (id) => { api.rate = { remaining: 100, reset: Date.parse('2026-11-18T09:02:00Z') / 1000 }; return done(id); };
+  const first = await pollInbox(d, cfg, { api });
+  assert.equal(first.done.length, 1, 'stops after the call that took it under the floor');
+  assert.equal((await pollInbox(d, cfg, { api, force: false })).skipped, true);
+  d.now = () => Date.parse('2026-11-18T08:45:00Z');
+  assert.equal((await pollInbox(d, cfg, { api })).skipped, true, 'still before the reset');
+  api.rate = null;
+  d.now = () => Date.parse('2026-11-18T09:03:00Z');
+  await pollInbox(d, cfg, { api });
+  assert.equal(users, 1, 'the login was checked once');
+});

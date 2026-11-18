@@ -41,6 +41,9 @@ export const SUBJECTS = ['PullRequest', 'Issue'];
 export const RUN_SUBJECTS = ['CheckSuite', 'WorkflowRun'];
 export const DEFAULT_KEEP_LABELS = ['ready', 'done'];
 export const MIN_POLL_SECONDS = 60;
+// Below this many calls left in the hour, the poll waits for the reset: the account's bucket is shared with everything else it runs.
+export const QUOTA_FLOOR = 500;
+const LOGIN_TRUST_MS = 6 * 3600 * 1000;
 const MAX_PAGES = 10;
 const API = 'https://api.github.com';
 
@@ -151,20 +154,30 @@ async function facts(n, api) {
 export function githubApi({ token, fetchFn = globalThis.fetch }) {
   const headers = (extra = {}) => ({ authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28', 'user-agent': 'shepherd-inbox', ...extra });
   const abs = (u) => (u.startsWith('http') ? u : `${API}${u}`);
-  return {
-    request: (url, init = {}) => fetchFn(abs(url), { ...init, headers: headers(init.headers) }),
+  const self = { rate: null };
+  const note = (r) => {
+    const left = Number(r?.headers?.get?.('x-ratelimit-remaining'));
+    const reset = Number(r?.headers?.get?.('x-ratelimit-reset'));
+    if (Number.isFinite(left) && r.headers.get('x-ratelimit-remaining') !== null && reset) self.rate = { remaining: left, reset };
+    return r;
+  };
+  return Object.assign(self, {
+    request: async (url, init = {}) => note(await fetchFn(abs(url), { ...init, headers: headers(init.headers) })),
     async json(url) {
       try {
-        const r = await fetchFn(abs(url), { headers: headers() });
+        const r = note(await fetchFn(abs(url), { headers: headers() }));
         return r.ok ? await r.json() : null;
       } catch { return null; }
     },
     async done(id) {
-      const r = await fetchFn(`${API}/notifications/threads/${id}`, { method: 'DELETE', headers: headers() });
+      const r = note(await fetchFn(`${API}/notifications/threads/${id}`, { method: 'DELETE', headers: headers() }));
       return r.status === 204 || r.status === 205 || r.status === 404;
     },
-  };
+  });
 }
+
+// When the last answer showed fewer than QUOTA_FLOOR calls left, the next poll waits for the hour's reset.
+const afterFloor = (api, nextAt) => (api.rate && api.rate.remaining < QUOTA_FLOOR ? Math.max(nextAt, api.rate.reset * 1000) : nextAt);
 
 // The account's own token first (SHEPHERD_INBOX_TOKEN_<LOGIN>, then `gh auth token --user`), and only then the shell's generic ones, so
 // a shell signed in as another account never decides whose inbox is read; the login is checked against the account anyway.
@@ -217,13 +230,17 @@ export async function pollInbox(d, cfg, { apply = true, api, force = false } = {
   const state = readInbox(d);
   if (!force && state.nextAt && now < state.nextAt) return { skipped: true, nextAt: state.nextAt };
   api ??= githubApi({ token: resolveToken(cfg) });
-  const me = await api.json('/user');
+  // The token's owner is checked once in a while, not every poll: that read is a call an hour-long bucket pays for every minute.
+  const trusted = state.login && lower(state.login) === lower(cfg.account) && now - (state.loginAt ?? 0) < LOGIN_TRUST_MS;
+  const me = trusted ? { login: state.login } : await api.json('/user');
   if (!me?.login) throw new ShepherdError({ code: 'inbox-token', problem: `the token for ${cfg.account} could not read its own account`, fix: 'give the token the notifications scope' });
   if (lower(me.login) !== lower(cfg.account)) throw new ShepherdError({ code: 'inbox-account', problem: `the token is ${me.login}'s, not ${cfg.account}'s`, fix: `use ${cfg.account}'s token: only that inbox is read` });
   const listed = await listNotifications(api, apply && !force ? state.lastModified : undefined);
-  const nextAt = now + Math.max(MIN_POLL_SECONDS, listed.pollSeconds) * 1000;
+  const login = { login: me.login, loginAt: trusted ? state.loginAt : now };
+  let nextAt = now + Math.max(MIN_POLL_SECONDS, listed.pollSeconds) * 1000;
+  nextAt = afterFloor(api, nextAt);
   if (listed.notModified) {
-    if (apply) writeJson(stateFile(d), { ...state, nextAt, pollSeconds: listed.pollSeconds });
+    if (apply) writeJson(stateFile(d), { ...state, ...login, nextAt, pollSeconds: listed.pollSeconds });
     return { notModified: true, nextAt };
   }
   const keep = readKeep(d, cfg);
@@ -231,7 +248,10 @@ export async function pollInbox(d, cfg, { apply = true, api, force = false } = {
   const nextCache = {};
   const done = [];
   const kept = [];
+  let paused = false;
   for (const n of listed.items) {
+    // Under the floor mid-pass: leave the rest unread for the next poll rather than spend what the others need.
+    if (api.rate && api.rate.remaining < QUOTA_FLOOR) { paused = true; break; }
     const key = `${n.id}:${n.updated_at}`;
     const row = { id: n.id, repo: n.repository?.full_name, title: n.subject?.title, reason: n.reason, type: n.subject?.type };
     let verdict = cache[key];
@@ -249,7 +269,8 @@ export async function pollInbox(d, cfg, { apply = true, api, force = false } = {
     }
   }
   if (apply) {
-    writeJson(stateFile(d), { lastModified: listed.lastModified, nextAt, pollSeconds: listed.pollSeconds, kept: nextCache });
+    nextAt = afterFloor(api, nextAt);
+    writeJson(stateFile(d), { ...login, lastModified: paused ? undefined : listed.lastModified, nextAt, pollSeconds: listed.pollSeconds, kept: nextCache });
     recordCounts(d, now, done, kept);
   }
   return { account: cfg.account, listed: listed.items.length, done, kept };
