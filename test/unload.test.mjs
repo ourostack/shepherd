@@ -92,3 +92,29 @@ test('a coordinator named for its role, or one that made a session in the last d
   assert.match(holdReason(row('a'), [row('b', { creatorSessionId: 'a', createdAt: hoursAgo(3) })], NOW), /last day/);
   assert.equal(holdReason(row('a'), [row('b', { creatorSessionId: 'a', createdAt: hoursAgo(40) })], NOW), null);
 });
+
+test('a heavy runtime (by footprint, not rss) goes after 15 quiet minutes, even a coordinator that made a session today', async () => {
+  const { parseFootprint } = await import('../src/unload.mjs');
+  assert.equal(parseFootprint('copilot-runtime [1]: 64-bit    Footprint: 17 GB (16384 bytes per page)'), 17408);
+  assert.equal(parseFootprint('x Footprint: 3183 MB (y)'), 3183);
+  const mins = (m) => new Date(NOW - m * 60000).toISOString();
+  const listed = [
+    row('a', { name: 'desk epoch 3', lastActivity: mins(20), updatedAt: mins(20) }),
+    row('k', { createdAt: hoursAgo(1), parentSessionId: 'a', lastActivity: mins(20), updatedAt: mins(20) }),
+  ];
+  const heavy = await planUnload({ runtimes: [{ pid: 1, rssMb: 300, footprintMb: 17000, sessions: ['a', 'k'] }], listed, d: d(), swapPct: 95 });
+  assert.equal(heavy.stop.length, 1);
+  assert.equal(heavy.stop[0].footprintMb, 17000);
+  const light = await planUnload({ runtimes: [{ pid: 1, rssMb: 300, footprintMb: 400, sessions: ['a', 'k'] }], listed, d: d(), swapPct: 95 });
+  assert.equal(light.stop.length, 0);
+  const busy = await planUnload({ runtimes: [{ pid: 1, rssMb: 300, footprintMb: 17000, sessions: ['a', 'k'] }], listed: [...listed, row('w', { parentSessionId: 'a', isRunning: true, state: 'busy' })], d: d(), swapPct: 95 });
+  assert.equal(busy.stop.length, 0);
+  const recent = await planUnload({ runtimes: [{ pid: 1, rssMb: 300, footprintMb: 17000, sessions: ['k'] }], listed: [row('k', { lastActivity: mins(5), updatedAt: mins(5) })], d: d(), swapPct: 95 });
+  assert.equal(recent.stop.length, 0);
+});
+
+test('heavy runtimes are stopped largest footprint first', async () => {
+  const listed = [row('a'), row('b')];
+  const p = await planUnload({ runtimes: [{ pid: 1, rssMb: 900, footprintMb: 2000, sessions: ['a'] }, { pid: 2, rssMb: 100, footprintMb: 9000, sessions: ['b'] }], listed, d: d(), swapPct: 95 });
+  assert.deepEqual(p.stop.map((s) => s.pid), [2, 1]);
+});
