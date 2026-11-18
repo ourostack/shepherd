@@ -1,6 +1,7 @@
 // `shepherd spend`: which model each session ran on, per coordinator and lane, from the sessions' own histories. Zero tokens.
 // A history records each model call as a session.usage_record (model, cost = premium-request weight, isAuto) and each model
-// choice as a session.model_change (newModel, source). A turn is an assistant.turn_start, given the model of the first reply
+// choice as a session.model_change (newModel, source); a session started with a kickoff model records it only as the
+// selectedModel of its session.start (or session.resume), with no model_change. A turn is an assistant.turn_start, given the model of the first reply
 // that follows it. Only events inside the window count; a lane's model choice is read from the whole history.
 import fs from 'node:fs';
 import readline from 'node:readline';
@@ -35,12 +36,13 @@ export async function readSession(file, { since, dayStart, now }) {
   let pendingTurn = null;
   const count = (at, model, part) => { if (at >= since && at <= now) bump(out.week, model, part); if (at >= dayStart && at <= now) bump(out.today, model, part); };
   for await (const line of stream) {
-    if (!line.includes('"session.usage_record"') && !line.includes('"session.model_change"') && !line.includes('"assistant.turn_start"') && !line.includes('"assistant.message"')) continue;
+    if (!line.includes('"session.usage_record"') && !line.includes('"session.model_change"') && !line.includes('"selectedModel"') && !line.includes('"assistant.turn_start"') && !line.includes('"assistant.message"')) continue;
     let e;
     try { e = JSON.parse(line); } catch { continue; }
     const at = Date.parse(e?.timestamp);
     const data = e?.data ?? {};
     if (e.type === 'session.model_change') out.changes.push({ model: data.newModel ?? null, source: data.source ?? null });
+    else if ((e.type === 'session.start' || e.type === 'session.resume') && typeof data.selectedModel === 'string' && data.selectedModel) out.changes.push({ model: data.selectedModel, source: 'start' });
     else if (e.type === 'assistant.turn_start' && e.agentId === undefined) pendingTurn = at;
     else if (e.type === 'assistant.message' && e.agentId === undefined && pendingTurn !== null && typeof data.model === 'string') {
       count(pendingTurn, data.model, { turns: 1 });

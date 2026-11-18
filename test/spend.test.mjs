@@ -24,6 +24,8 @@ const turns = (model, n, { cost = 1, at = NOW - H, isAuto = false } = {}) => Arr
   { type: 'assistant.message', data: { model }, at: at + i * 10 + 2 },
 ]).flat();
 
+const started = (model, type = 'session.start') => ({ type, data: { selectedModel: model }, at: NOW - 40 * H });
+
 function fixture() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'spend-'));
   writeHistory(home, OPUS_LANE, [change('claude-opus-4.6'), ...turns('claude-opus-4.6', 12, { cost: 3 })]);
@@ -77,4 +79,17 @@ test('a session whose turns are all older than the window is left out, and the t
   assert.match(text, /EXPENSIVE Lane wc2/);
   assert.match(text, /Decision: Lane wc2 run 50% or more/);
   assert.match(text, /No explicit model \(1\): Lane w3 \(3 turns\)/);
+});
+
+test('a lane started with a kickoff model is explicit: its session.start (or resume) selectedModel counts, with no model_change', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'spend-'));
+  const KICKOFF = 'a0000000-0000-4000-8000-000000000011', RESUMED = 'a0000000-0000-4000-8000-000000000012', AUTO = 'a0000000-0000-4000-8000-000000000013', NONE = 'a0000000-0000-4000-8000-000000000014';
+  writeHistory(home, KICKOFF, [started('claude-sonnet-5.5'), ...turns('claude-sonnet-5.5', 4)]);
+  writeHistory(home, RESUMED, [started('claude-haiku-4.5', 'session.resume'), ...turns('claude-haiku-4.5', 2)]);
+  writeHistory(home, AUTO, [started('auto'), ...turns('claude-opus-4.6', 2, { isAuto: true })]);
+  writeHistory(home, NONE, [...turns('claude-opus-4.6', 3)]);
+  writeHistory(home, COORD, [change('claude-opus-4.6'), ...turns('claude-opus-4.6', 1)]);
+  const app = fakeApp({ workspaces: [ws('wc', COORD), ...[KICKOFF, RESUMED, AUTO, NONE].map((id, i) => ws(`k${i}`, id, { coordinatingCreatorSessionId: COORD }))] });
+  const r = await spend(testDeps(home, { app }));
+  assert.deepEqual(r.noModel.map((s) => s.name).sort(), ['Lane k2', 'Lane k3']);
 });
