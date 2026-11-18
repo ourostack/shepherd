@@ -88,6 +88,8 @@ Read-only except `restore-history`, `watch`, `install`, an applied quota tick, `
 
 `shepherd install` writes `~/Library/LaunchAgents/bot.ouro.shepherd.plist` and loads it. The agent runs `shepherd watch --every 60 --quiet` and is kept alive, so every 60 seconds one pass runs the health watch, then the quota balancer, then the sidebar tidy (at most every `everyMinutes`), with no one at a terminal. Its log is `~/Library/Logs/shepherd-watch.launchd.log`. `shepherd install --dry-run` prints the plist and changes nothing.
 
+A duty that runs over 3 minutes (12 for the wake runners) is logged and left behind, and the pass moves on to the next one, so a stuck duty cannot stop the wake runners.
+
 The resident watch also keeps one observer connection open to hear the questions and plans sessions ask, which `answer` and `plan` need.
 
 The health watch follows each session that a resume sent a message to, for six hours. It asks a silent, erroring or stuck session once more, and tells the agent by name only about a session that stays broken.

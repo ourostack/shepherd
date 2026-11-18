@@ -184,7 +184,7 @@ export const wakeSender = (d) => async (session, message, delivery, replaces) =>
   if (replaces) await withdrawQueued(d, target, replaces).catch(() => 0);
   const sent = await sendTo(d, target, message, WAKE_SEND_MS, delivery);
   if (sent.ok) return { ok: true, error: null, ...(found?.from ? { note: found.note } : {}) };
-  return { ok: false, error: sent.error ?? (sent.reply === 'no reply' ? 'the app did not answer in time' : null) };
+  return { ok: false, error: sent.error ?? (sent.reply === 'no reply' ? 'the app did not answer in time' : `the app answered ${sent.reply}, not that it took the message`) };
 };
 
 // The deps a runner uses, over the app: the command runner, the sender, the delivery check, and the clock.
