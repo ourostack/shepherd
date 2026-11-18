@@ -14,3 +14,4 @@ export { noticeOversizedSessions, whereItLeftOff } from './size-watch.mjs';
 export { planWakes, readWakeStates, runDueWakes, runWakeRunners, runnerDeps, wakeStatusLines, wakesConfig, wakesFile } from './wakes.mjs';
 export { resumeStuck, stuckPlan, stuckResumeConfig, stuckResumeFile } from './stuck-resume.mjs';
 export { trustAll, trustConfig, trustFile, untrusted } from './trust.mjs';
+export { TARGETS as RESPONSIVENESS_TARGETS, judge as judgeResponsiveness, percentile, readReadings as readResponsiveness, render as renderResponsiveness, sample as sampleResponsiveness } from './responsiveness.mjs';
