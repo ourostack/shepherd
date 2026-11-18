@@ -274,7 +274,7 @@ test('idle-landed: archives an idle session, coordinated or not, once it has bee
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-test('swap pressure: a session idle a day whose only unlanded work is on main itself is archived; without pressure, or with work on a branch, it stays', async () => {
+test('swap pressure: a session idle six hours whose only unlanded work is on main itself is archived; without pressure, or with work on a branch, it stays', async () => {
   const home = tmp('retire-pressure-');
   const app = fakeApp();
   const onMain = { checkLanded: async () => ({ outcome: 'hold', onDefault: true, why: 'it has uncommitted changes on main itself, which cannot be landed by a pull request' }) };
