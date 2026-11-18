@@ -9,7 +9,8 @@
 // - Idle and landed: any other idle session, coordinated or not, quiet for IDLE_LANDED_MS with its work on main (nothing is
 //   committed, pushed or opened for it: a session with unlanded work simply stays). Each idle session holds its MCP servers and
 //   extensions, about 150 MB, so this is what frees the Mac's memory. It never takes a coordinator: a session with a working
-//   child, one that created a session in the last day, or one named for the role.
+//   child, one that created a session in the last day, or one named for the role. A cloud-hosted session (no folder here, so
+//   nothing to land) is taken by this rule and the finished one after a full day idle.
 //
 // None of these ever goes while it runs, waits on a person, or is stuck, or while a session it coordinates still works: the app
 // archives a session without its children, which keep running but can no longer report to it, so a predecessor stays until
@@ -67,6 +68,9 @@ const heldUntil = new Map();
 
 const quietSince = (row) => Math.max(Date.parse(row.lastActivity ?? '') || 0, Date.parse(row.updatedAt ?? '') || 0);
 const settled = (row) => !row.isRunning && row.state === 'idle' && !row.awaiting && !row.remote;
+// A cloud-hosted session has no working folder here and no local history to read, so its idle state rests on the app's own
+// word (not running, nothing awaited) and its last update. That is weaker than a local session's, so it waits a full day.
+const settledRemote = (row) => row.remote && !row.isRunning && row.state === 'idle' && !row.awaiting;
 const recordedCoordinator = (row) => row.coordinatingCreatorSessionId ?? row.parentSessionId;
 const short = (id) => id.slice(0, 8);
 
@@ -148,7 +152,7 @@ export async function retireSessions(listed, d, { apply = false, idleLanded = fa
   }
 
   for (const row of listed) {
-    if (gone.has(row.id) || gated.has(row.id) || !settled(row) || row.openPullRequest || row.automation) continue;
+    if (gone.has(row.id) || gated.has(row.id) || !(settled(row) || settledRemote(row)) || row.openPullRequest || row.automation) continue;
     const coordinator = recordedCoordinator(row);
     if (!coordinator || (byId.has(coordinator) && !gone.has(coordinator))) continue;
     // The recorded coordinator may have handed off: a lane that a live successor or the session it reports to still
@@ -156,7 +160,7 @@ export async function retireSessions(listed, d, { apply = false, idleLanded = fa
     const live = coordinatorOf(row, listed, { d, successorOf: (id) => successorOf(id, successions) });
     if (live && 'id' in live && !gone.has(live.id)) continue;
     if (now - quietSince(row) < FINISHED_IDLE_MS || busyChildren(row.id, null).length) continue;
-    const gate = await landedGate(row, d, apply, 'finished');
+    const gate = row.remote ? null : await landedGate(row, d, apply, 'finished');
     if (gate) { entries.push(gate); continue; }
     const why = `${row.detail || 'idle'}; ${whereItLeftOff(row, d)}`;
     if (apply && !(await doArchive(d, row, 'finished', why))) continue;
@@ -168,8 +172,8 @@ export async function retireSessions(listed, d, { apply = false, idleLanded = fa
   // held one for half an hour, so a minute's pass does not fetch from GitHub for the whole sidebar.
   const kidsOf = (id) => listed.filter((row) => recordedCoordinator(row) === id || row.creatorSessionId === id);
   const candidates = listed
-    .filter((row) => !gone.has(row.id) && !gated.has(row.id) && settled(row) && !row.openPullRequest && !row.automation)
-    .filter((row) => now - quietSince(row) >= IDLE_LANDED_MS && !COORDINATOR_ROLE.test(row.name ?? ''))
+    .filter((row) => !gone.has(row.id) && !gated.has(row.id) && (settled(row) || settledRemote(row)) && !row.openPullRequest && !row.automation)
+    .filter((row) => now - quietSince(row) >= (row.remote ? FINISHED_IDLE_MS : IDLE_LANDED_MS) && !COORDINATOR_ROLE.test(row.name ?? ''))
     .filter((row) => !kidsOf(row.id).some((kid) => !settled(kid) && !(kid.remote && !kid.isRunning)) && !kidsOf(row.id).some((kid) => now - (Date.parse(kid.createdAt ?? '') || 0) < COORDINATOR_RECENT_MS))
     .filter((row) => !apply || (heldUntil.get(row.id) ?? 0) <= now)
     .sort((a, b) => quietSince(a) - quietSince(b));
@@ -177,7 +181,7 @@ export async function retireSessions(listed, d, { apply = false, idleLanded = fa
   for (const row of idleLanded ? candidates : []) {
     if (apply && looked >= IDLE_LANDED_PER_PASS) break;
     looked += 1;
-    const gate = await landedGate(row, d, apply, 'idle-landed', { land: false });
+    const gate = row.remote ? null : await landedGate(row, d, apply, 'idle-landed', { land: false });
     const mainOnly = gate?.onDefault && pressure && now - quietSince(row) >= PRESSURE_MAIN_MS;
     if (gate && !mainOnly) { heldUntil.set(row.id, now + HELD_AGAIN_MS); entries.push(gate); continue; }
     const why = `idle ${Math.round((now - quietSince(row)) / 3_600_000)} h${recordedCoordinator(row) ? '' : ', no coordinator'}${mainOnly ? `, swap ${swapPct}% full; its folder keeps the changes it has on main (${gate.why})` : ''}; ${whereItLeftOff(row, d)}`;
