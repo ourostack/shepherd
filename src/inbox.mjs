@@ -7,6 +7,7 @@
 //
 // A thread is marked done only when its reason is one of AUTO_REASONS, it is a pull request or issue, and nobody who is not the
 // owner's account, a bot or an updater acted last (see judge). Anything unknown is kept: a failed lookup never marks done.
+//   ci_activity on a workflow run (CheckSuite)      the run result is the lane's or the red-main route's, never a person's
 //   state_change, author, subscribed, ci_activity   it was written by the owner's account or a bot, and the last actor (latest
 //                                                   unread comment, else who merged or closed it, else its author) is too
 //   review_requested                                the pull request's author is a bot or an updater: a CODEOWNERS request
@@ -16,11 +17,12 @@
 // marked ready or done for the owner stays visible.
 //
 // Nothing runs until ~/.config/shepherd/inbox.json (or SHEPHERD_INBOX_CONFIG) says "enabled": true:
-//   { "enabled": true, "account": "<login>", "bots": ["<extra login>"], "keepLabels": ["ready", "done"], "ledger": "<file>" }
-// Records, in the state folder: inbox-log.jsonl (one line per thread marked done: reason and a one-line why), inbox.json (the
-// poll cursor and cache) and inbox-counts.json (per day: marked done, kept, by reason), also written to `ledger` when set,
-// for the attention ledger. The token is SHEPHERD_INBOX_TOKEN, GH_TOKEN, GITHUB_TOKEN, or `gh auth token --user <account>`; it
-// needs the notifications scope, and is refused when it is not the account's.
+//   { "enabled": true, "accounts": ["<login>", { "account": "<login>", "bots": ["<extra login>"] }], "keepLabels": ["ready", "done"], "ledger": "<file>" }
+// Each account is read with its own token. Records, in the state folder: <login>/inbox-log.jsonl under inbox/ (one line per thread
+// marked done: reason and a one-line why), the poll cursor and cache, and per-day counts; inbox-counts.json holds every account's
+// counts (marked done, kept, by reason) and is also written to `ledger` when set, for the attention ledger. The token is the
+// account's own (SHEPHERD_INBOX_TOKEN_<LOGIN>, or `gh auth token --user <login>`), then SHEPHERD_INBOX_TOKEN, GH_TOKEN, GITHUB_TOKEN;
+// it needs the notifications scope, and is refused when /user says it is not the account's.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -28,8 +30,12 @@ import path from 'node:path';
 import { ShepherdError } from './error.mjs';
 import { readJson, writeJson } from './store.mjs';
 
+const lower = (s) => String(s ?? '').toLowerCase();
+
 export const AUTO_REASONS = ['state_change', 'author', 'subscribed', 'ci_activity', 'review_requested'];
 export const SUBJECTS = ['PullRequest', 'Issue'];
+/** A workflow run's notification (ci_activity) is for the lane or the red-main route, never for a person's inbox. */
+export const RUN_SUBJECTS = ['CheckSuite', 'WorkflowRun'];
 export const DEFAULT_KEEP_LABELS = ['ready', 'done'];
 export const MIN_POLL_SECONDS = 60;
 const MAX_PAGES = 10;
@@ -37,30 +43,34 @@ const API = 'https://api.github.com';
 
 export const inboxFile = (env = process.env, home = os.homedir()) => env.SHEPHERD_INBOX_CONFIG || path.join(home, '.config', 'shepherd', 'inbox.json');
 
-// The inbox config from inbox.json: { enabled, account, bots, keepLabels, ledger }. No file: off. A file that is not valid is an error.
+// The inbox config from inbox.json: { enabled, accounts: [{ account, bots, keepLabels }], ledger }. `accounts` lists the inboxes to
+// tidy, each a login or { account, bots?, keepLabels? } (top-level bots and keepLabels are the defaults); `account` alone names
+// one. No file: off. A file that is not valid is an error.
 export function inboxConfig(file = inboxFile()) {
   let text;
   try {
     text = fs.readFileSync(file, 'utf8');
   } catch (e) {
-    if (e.code === 'ENOENT') return { enabled: false, account: 'arimendelow', bots: [], keepLabels: DEFAULT_KEEP_LABELS, ledger: null };
+    if (e.code === 'ENOENT') return { enabled: false, accounts: [], ledger: null };
     throw new ShepherdError({ code: 'inbox-config', problem: `${file} could not be read (${e.message})`, fix: 'check the file, or delete it to turn the inbox duty off' });
   }
   let c;
   try { c = JSON.parse(text); } catch (e) {
     throw new ShepherdError({ code: 'inbox-config', problem: `${file} is not valid JSON (${e.message})`, fix: 'fix the file, or delete it to turn the inbox duty off' });
   }
-  const strings = (v, fallback) => (Array.isArray(v) ? v.filter((s) => typeof s === 'string' && s) : fallback);
-  return {
-    enabled: c?.enabled === true,
-    account: typeof c?.account === 'string' && c.account ? c.account : 'arimendelow',
-    bots: strings(c?.bots, []).map((s) => s.toLowerCase()),
-    keepLabels: strings(c?.keepLabels, DEFAULT_KEEP_LABELS).map((s) => s.toLowerCase()),
-    ledger: typeof c?.ledger === 'string' && c.ledger ? c.ledger : null,
-  };
+  const strings = (v, fallback) => (Array.isArray(v) ? v.filter((s) => typeof s === 'string' && s).map((s) => s.toLowerCase()) : fallback);
+  const bots = strings(c?.bots, []);
+  const keepLabels = strings(c?.keepLabels, DEFAULT_KEEP_LABELS);
+  const listed = Array.isArray(c?.accounts) ? c.accounts : typeof c?.account === 'string' ? [c.account] : ['arimendelow'];
+  const accounts = [];
+  for (const a of listed) {
+    const login = typeof a === 'string' ? a : a?.account;
+    if (typeof login !== 'string' || !login || accounts.some((x) => lower(x.account) === lower(login))) continue;
+    accounts.push({ account: login, bots: strings(a?.bots, bots), keepLabels: strings(a?.keepLabels, keepLabels) });
+  }
+  return { enabled: c?.enabled === true, accounts, ledger: typeof c?.ledger === 'string' && c.ledger ? c.ledger : null };
 }
 
-const lower = (s) => String(s ?? '').toLowerCase();
 
 // Who a login is: the owner's account, a bot or an updater (an App's [bot] account, a user of type Bot, or one the config
 // names), or a person.
@@ -81,6 +91,7 @@ export function judge(n, facts, cfg, keep = []) {
   const repo = n.repository?.full_name ?? '?';
   const keepIt = (rule, why) => ({ done: false, rule, why });
   if (!AUTO_REASONS.includes(n.reason)) return keepIt('reason', `reason ${n.reason} is for a person to read`);
+  if (n.reason === 'ci_activity' && RUN_SUBJECTS.includes(n.subject?.type)) return { done: true, rule: 'ci-run', why: `ci_activity: ${n.subject?.title ?? 'a workflow run'} is a run result, which the lane or the red-main route owns` };
   if (!SUBJECTS.includes(n.subject?.type)) return keepIt('subject', `${n.subject?.type ?? 'unknown subject'} is not a pull request or issue`);
   if (!facts) return keepIt('unknown', 'its details could not be read');
   if (facts.number !== undefined && keep.includes(keepKey(repo, facts.number))) return keepIt('keep-list', 'it is on the keep list');
@@ -147,13 +158,17 @@ export function githubApi({ token, fetchFn = globalThis.fetch }) {
   };
 }
 
-export function resolveToken(cfg, env = process.env, run = (account) => execFileSync('gh', ['auth', 'token', '--user', account], { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'] })) {
-  for (const key of ['SHEPHERD_INBOX_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN']) if (env[key]) return env[key];
+// The account's own token first (SHEPHERD_INBOX_TOKEN_<LOGIN>, then `gh auth token --user`), and only then the shell's generic ones, so
+// a shell signed in as another account never decides whose inbox is read; the login is checked against the account anyway.
+export const tokenEnvName = (account) => `SHEPHERD_INBOX_TOKEN_${String(account).toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
+export function resolveToken(acct, env = process.env, run = (account) => execFileSync('gh', ['auth', 'token', '--user', account], { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, GH_TOKEN: '', GITHUB_TOKEN: '' } })) {
+  if (env[tokenEnvName(acct.account)]) return env[tokenEnvName(acct.account)];
   try {
-    const t = run(cfg.account).trim();
+    const t = run(acct.account).trim();
     if (t) return t;
   } catch { /* fall through */ }
-  throw new ShepherdError({ code: 'inbox-token', problem: `no GitHub token for ${cfg.account}`, fix: 'set SHEPHERD_INBOX_TOKEN, or sign gh in as that account with the notifications scope' });
+  for (const key of ['SHEPHERD_INBOX_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN']) if (env[key]) return env[key];
+  throw new ShepherdError({ code: 'inbox-token', problem: `no GitHub token for ${acct.account}`, fix: `sign gh in as ${acct.account} with the notifications scope, or set ${tokenEnvName(acct.account)}` });
 }
 
 const stateFile = (d) => path.join(d.state, 'inbox.json');
@@ -194,11 +209,9 @@ export async function pollInbox(d, cfg, { apply = true, api, force = false } = {
   const state = readInbox(d);
   if (!force && state.nextAt && now < state.nextAt) return { skipped: true, nextAt: state.nextAt };
   api ??= githubApi({ token: resolveToken(cfg) });
-  if (apply) {
-    const me = await api.json('/user');
-    if (!me?.login) throw new ShepherdError({ code: 'inbox-token', problem: 'the token could not read its own account', fix: 'give the token the notifications scope' });
-    if (lower(me.login) !== lower(cfg.account)) throw new ShepherdError({ code: 'inbox-account', problem: `the token is ${me.login}'s, not ${cfg.account}'s`, fix: `use ${cfg.account}'s token: only that inbox is tidied` });
-  }
+  const me = await api.json('/user');
+  if (!me?.login) throw new ShepherdError({ code: 'inbox-token', problem: `the token for ${cfg.account} could not read its own account`, fix: 'give the token the notifications scope' });
+  if (lower(me.login) !== lower(cfg.account)) throw new ShepherdError({ code: 'inbox-account', problem: `the token is ${me.login}'s, not ${cfg.account}'s`, fix: `use ${cfg.account}'s token: only that inbox is read` });
   const listed = await listNotifications(api, apply && !force ? state.lastModified : undefined);
   const nextAt = now + Math.max(MIN_POLL_SECONDS, listed.pollSeconds) * 1000;
   if (listed.notModified) {
@@ -229,14 +242,14 @@ export async function pollInbox(d, cfg, { apply = true, api, force = false } = {
   }
   if (apply) {
     writeJson(stateFile(d), { lastModified: listed.lastModified, nextAt, pollSeconds: listed.pollSeconds, kept: nextCache });
-    recordCounts(d, cfg, now, done, kept);
+    recordCounts(d, now, done, kept);
   }
   return { account: cfg.account, listed: listed.items.length, done, kept };
 }
 
 // Per-day counts, in the state folder and (when configured) the attention ledger's file: threads marked done by reason, and what
 // the last poll left in the inbox for a person.
-function recordCounts(d, cfg, now, done, kept) {
+function recordCounts(d, now, done, kept) {
   const day = new Date(now).toISOString().slice(0, 10);
   const all = readCounts(d);
   const today = all.days[day] ?? { markedDone: 0, byReason: {}, byRule: {} };
@@ -248,16 +261,39 @@ function recordCounts(d, cfg, now, done, kept) {
   today.keptNow = kept.length;
   today.updatedAt = new Date(now).toISOString();
   const days = Object.fromEntries(Object.entries({ ...all.days, [day]: today }).sort().slice(-14));
-  const out = { source: 'github-inbox', account: cfg.account, days };
-  writeJson(countsFile(d), out);
-  if (cfg.ledger) writeJson(cfg.ledger, out);
+  writeJson(countsFile(d), { days });
 }
 
-export const inboxStatus = (d) => ({ ...readInbox(d), kept: undefined, counts: readCounts(d).days });
+const accountDeps = (d, account) => ({ ...d, state: path.join(d.state, 'inbox', account.toLowerCase()) });
 
-export function renderInbox(r) {
-  if (r.skipped) return `inbox: not due until ${new Date(r.nextAt).toISOString()}`;
-  if (r.notModified) return 'inbox: nothing changed since the last poll';
+// One poll of every configured account's inbox, each with its own token and its own state under <state>/inbox/<login>/. One
+// account failing is reported in its result and does not stop the others. The counts of every account are written to
+// <state>/inbox-counts.json and, when set, the ledger file: { source, accounts: { <login>: { days } } }.
+// Resolves to [{ account, ...result } | { account, error }].
+export async function pollInboxes(d, cfg, { apply = true, force = false, apis = {} } = {}) {
+  const results = [];
+  for (const acct of cfg.accounts) {
+    try { results.push({ account: acct.account, ...(await pollInbox(accountDeps(d, acct.account), acct, { apply, force, api: apis[acct.account] })) }); } catch (e) {
+      results.push({ account: acct.account, error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+  if (apply) {
+    const out = inboxStatus(d, cfg);
+    writeJson(path.join(d.state, 'inbox-counts.json'), out);
+    if (cfg.ledger) writeJson(cfg.ledger, out);
+  }
+  return results;
+}
+
+export const inboxStatus = (d, cfg) => ({ source: 'github-inbox', accounts: Object.fromEntries(cfg.accounts.map((a) => { const x = accountDeps(d, a.account); return [a.account, { nextAt: readInbox(x).nextAt, days: readCounts(x).days }]; })) });
+
+export function renderInbox(results) {
+  return results.map((r) => (r.error ? `inbox ${r.account}: ${r.error}` : renderOne(r))).join('\n');
+}
+
+function renderOne(r) {
+  if (r.skipped) return `inbox ${r.account}: not due until ${new Date(r.nextAt).toISOString()}`;
+  if (r.notModified) return `inbox ${r.account}: nothing changed since the last poll`;
   const lines = [`inbox ${r.account}: ${r.listed} unread, ${r.done.length} done, ${r.kept.length} kept`];
   for (const x of r.done) lines.push(`  done  ${x.repo}  ${x.title}  [${x.reason}]  ${x.why}`);
   for (const x of r.kept) lines.push(`  kept  ${x.repo}  ${x.title}  [${x.reason}]  ${x.why}`);

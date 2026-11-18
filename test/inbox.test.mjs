@@ -4,10 +4,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { inboxConfig, judge, pollInbox, classify } from '../src/inbox.mjs';
+import { inboxConfig, judge, pollInbox, pollInboxes, resolveToken, classify } from '../src/inbox.mjs';
 
 const ME = 'arimendelow';
-const cfg = { enabled: true, account: ME, bots: ['an-updater'], keepLabels: ['ready', 'done'], ledger: null };
+const cfg = { account: ME, bots: ['an-updater'], keepLabels: ['ready', 'done'] };
 const user = (login, type = 'User') => ({ login, type });
 
 let nextId = 1;
@@ -129,13 +129,66 @@ test('something marked ready or done for the owner stays: by label or by the kee
   assert.deepEqual(r.done, []);
 });
 
-test('anything it cannot read is kept, and a check run or other subject is left alone', async () => {
+test('anything it cannot read is kept, and another kind of subject is left alone', async () => {
   const broken = thread({ reason: 'state_change' });
   delete broken.objects[broken.n.subject.url];
-  const suite = thread({ reason: 'ci_activity', type: 'CheckSuite' });
-  const { r, api } = await run([broken, suite]);
+  const release = thread({ reason: 'subscribed', type: 'Release' });
+  const { r, api } = await run([broken, release]);
   assert.deepEqual(api.calls.done, []);
   assert.deepEqual(r.kept.map((k) => k.rule), ['unknown', 'subject']);
+});
+
+test('a failed workflow run (ci_activity on a CheckSuite) is marked done and logged; a mention on one is not', async () => {
+  const suite = thread({ reason: 'ci_activity', type: 'CheckSuite', title: 'ci workflow run failed for main branch' });
+  const run2 = thread({ reason: 'ci_activity', type: 'WorkflowRun' });
+  const mention = thread({ reason: 'mention', type: 'CheckSuite' });
+  const { r, api, d } = await run([suite, run2, mention]);
+  assert.deepEqual(api.calls.done, [suite.n.id, run2.n.id]);
+  assert.equal(r.done[0].rule, 'ci-run');
+  assert.match(r.done[0].why, /red-main/);
+  assert.equal(r.kept[0].rule, 'reason');
+  assert.equal(fs.readFileSync(path.join(d.state, 'inbox-log.jsonl'), 'utf8').trim().split('\n').length, 2);
+});
+
+test('a token for a different account is refused, in a plan too, and the match is exact', async () => {
+  const t = thread({ reason: 'state_change', closedBy: user('github-actions[bot]', 'Bot') });
+  for (const login of ['arimendelow_microsoft', 'arimendelo']) {
+    for (const apply of [true, false]) {
+      const api = fakeGithub([t], { login });
+      await assert.rejects(pollInbox(deps0(), cfg, { api, apply }), /not arimendelow's/);
+      assert.deepEqual(api.calls.list, [], 'nothing was read');
+    }
+  }
+});
+
+test('the account\'s own token is chosen ahead of the shell\'s GH_TOKEN', () => {
+  const asked = [];
+  const run = (a) => { asked.push(a); return `gh-token-of-${a}\n`; };
+  const env = { GH_TOKEN: 'the-shells-token' };
+  assert.equal(resolveToken({ account: 'arimendelow' }, env, run), 'gh-token-of-arimendelow');
+  assert.equal(resolveToken({ account: 'arimendelow_microsoft' }, { ...env, SHEPHERD_INBOX_TOKEN_ARIMENDELOW_MICROSOFT: 'pinned' }, run), 'pinned');
+  assert.equal(resolveToken({ account: 'x' }, env, () => { throw new Error('no'); }), 'the-shells-token');
+  assert.throws(() => resolveToken({ account: 'x' }, {}, () => ''), /no GitHub token for x/);
+});
+
+test('every configured account is read with its own token and its own state, and one failing does not stop the other', async () => {
+  const d = deps0();
+  const mine = thread({ reason: 'state_change', closedBy: user('github-actions[bot]', 'Bot') });
+  const work = thread({ reason: 'ci_activity', type: 'CheckSuite', repo: 'gim-home/x' });
+  const ledger = path.join(d.state, 'ledger.json');
+  const c = { enabled: true, ledger, accounts: [{ ...cfg, account: 'arimendelow_microsoft' }, cfg] };
+  const apis = { arimendelow_microsoft: fakeGithub([work], { login: 'arimendelow_microsoft' }), [ME]: fakeGithub([mine]) };
+  const r = await pollInboxes(d, c, { apis });
+  assert.deepEqual(r.map((x) => [x.account, x.done.length]), [['arimendelow_microsoft', 1], [ME, 1]]);
+  assert.deepEqual(apis.arimendelow_microsoft.calls.done, [work.n.id]);
+  const out = JSON.parse(fs.readFileSync(ledger, 'utf8'));
+  assert.equal(out.accounts[ME].days['2026-11-18'].markedDone, 1);
+  assert.equal(out.accounts.arimendelow_microsoft.days['2026-11-18'].markedDone, 1);
+
+  const bad = { arimendelow_microsoft: fakeGithub([], { login: 'someone' }), [ME]: fakeGithub([]) };
+  const r2 = await pollInboxes(deps0(), c, { apis: bad });
+  assert.match(r2[0].error, /someone/);
+  assert.equal(r2[1].listed, 0);
 });
 
 test('plan marks nothing and writes nothing', async () => {
@@ -174,7 +227,10 @@ test('classify and config', () => {
     assert.equal(inboxConfig(path.join(dir, 'none.json')).enabled, false);
     fs.writeFileSync(path.join(dir, 'c.json'), JSON.stringify({ enabled: true, bots: ['X'], ledger: '/tmp/l.json' }));
     const c = inboxConfig(path.join(dir, 'c.json'));
-    assert.deepEqual([c.enabled, c.account, c.bots, c.ledger], [true, 'arimendelow', ['x'], '/tmp/l.json']);
+    assert.deepEqual([c.enabled, c.accounts.map((a) => a.account), c.accounts[0].bots, c.ledger], [true, ['arimendelow'], ['x'], '/tmp/l.json']);
+    fs.writeFileSync(path.join(dir, 'm.json'), JSON.stringify({ enabled: true, bots: ['x'], accounts: ['a', { account: 'B', bots: ['y'] }, 'A', 7] }));
+    const m = inboxConfig(path.join(dir, 'm.json'));
+    assert.deepEqual(m.accounts.map((a) => [a.account, a.bots]), [['a', ['x']], ['B', ['y']]]);
     fs.writeFileSync(path.join(dir, 'bad.json'), '{');
     assert.throws(() => inboxConfig(path.join(dir, 'bad.json')), /not valid JSON/);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }

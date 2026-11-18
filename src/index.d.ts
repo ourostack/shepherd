@@ -375,17 +375,20 @@ export function judgeResponsiveness(readings: ResponsivenessReading[], targets?:
 export function renderResponsiveness(verdict: ResponsivenessVerdict): string;
 export function percentile(values: Array<number | null>, p: number): number | null;
 
-export interface InboxConfig { enabled: boolean; account: string; bots: string[]; keepLabels: string[]; ledger: string | null }
+export interface InboxAccount { account: string; bots: string[]; keepLabels: string[] }
+export interface InboxConfig { enabled: boolean; accounts: InboxAccount[]; ledger: string | null }
 export interface InboxItem { id: string; repo?: string; title?: string; reason: string; type?: string; rule: string; why: string }
-/** The inbox config from inbox.json (SHEPHERD_INBOX_CONFIG overrides the path). No file: { enabled: false, account: 'arimendelow', … }. */
+/** The inbox config from inbox.json (SHEPHERD_INBOX_CONFIG overrides the path). No file: { enabled: false, accounts: [], ledger: null }. `accounts` lists the inboxes, each read with its own token. */
 export function inboxConfig(file?: string): InboxConfig;
 export function inboxFile(env?: Record<string, string | undefined>, home?: string): string;
 /** The reasons a thread may be marked done: state_change, author, subscribed, ci_activity, review_requested. */
 export const INBOX_REASONS: string[];
-export function classifyInboxActor(user: { login?: string; type?: string } | null | undefined, cfg: Pick<InboxConfig, 'account' | 'bots'>): 'owner' | 'bot' | 'human' | 'unknown';
+export function classifyInboxActor(user: { login?: string; type?: string } | null | undefined, cfg: Pick<InboxAccount, 'account' | 'bots'>): 'owner' | 'bot' | 'human' | 'unknown';
 /** Decides one notification from the facts fetched for it. Pure: { done, rule, why }. */
-export function judgeInbox(n: object, facts: object | null, cfg: InboxConfig, keep?: string[]): { done: boolean; rule: string; why: string };
-/** One poll of the owner's GitHub notifications; apply: false judges and marks nothing. Marks agent-caused threads done and logs each. */
-export function pollInbox(deps: Deps, cfg: InboxConfig, opts?: { apply?: boolean; force?: boolean; api?: object }): Promise<{ skipped: true; nextAt: number } | { notModified: true; nextAt: number } | { account: string; listed: number; done: InboxItem[]; kept: InboxItem[] }>;
-export function inboxStatus(deps: Deps): { lastModified?: string; nextAt?: number; pollSeconds?: number; counts: Record<string, { markedDone: number; keptNow: number; byReason: Record<string, number>; byRule: Record<string, number>; updatedAt: string }> };
-export function renderInbox(result: object): string;
+export function judgeInbox(n: object, facts: object | null, cfg: InboxAccount, keep?: string[]): { done: boolean; rule: string; why: string };
+/** One poll of one account's GitHub notifications; apply: false judges and marks nothing. `d.state` is that account's folder. */
+export function pollInbox(deps: Deps, acct: InboxAccount, opts?: { apply?: boolean; force?: boolean; api?: object }): Promise<{ skipped: true; nextAt: number } | { notModified: true; nextAt: number } | { account: string; listed: number; done: InboxItem[]; kept: InboxItem[] }>;
+/** Polls every configured account with its own token, each in its own state folder; one account failing does not stop the rest. Writes the counts of all accounts to inbox-counts.json and the ledger. */
+export function pollInboxes(deps: Deps, cfg: InboxConfig, opts?: { apply?: boolean; force?: boolean; apis?: Record<string, object> }): Promise<({ account: string; error: string } | { account: string; skipped?: true; notModified?: true; listed?: number; done?: InboxItem[]; kept?: InboxItem[] })[]>;
+export function inboxStatus(deps: Deps, cfg: InboxConfig): { source: 'github-inbox'; accounts: Record<string, { nextAt?: number; days: Record<string, { markedDone: number; keptNow: number; byReason: Record<string, number>; byRule: Record<string, number>; updatedAt: string }> }> };
+export function renderInbox(results: object[]): string;

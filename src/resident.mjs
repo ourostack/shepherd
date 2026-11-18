@@ -11,7 +11,7 @@ import { rows as sessionRows } from './rows.mjs';
 import { runDueWakes, wakesConfig } from './wakes.mjs';
 import { resumeStuck, stuckResumeConfig } from './stuck-resume.mjs';
 import { trustAll, trustConfig } from './trust.mjs';
-import { inboxConfig, pollInbox } from './inbox.mjs';
+import { inboxConfig, pollInboxes } from './inbox.mjs';
 import { listenPrompts } from './prompts.mjs';
 import { sample as sampleResponsiveness } from './responsiveness.mjs';
 
@@ -116,9 +116,13 @@ export function watchDuties({ copilotHome, quiet = false, say = () => {}, log = 
       run: async () => {
         const cfg = inboxConfig();
         if (!cfg.enabled) return;
-        const r = await pollInbox(deps({ copilotHome }), cfg, { apply: true });
-        for (const x of r.done ?? []) log(`shepherd: inbox: done ${x.repo} "${x.title}" [${x.reason}] ${x.why}`);
-        if (!quiet && r.done?.length) say(`inbox: ${r.done.length} agent-caused notification(s) marked done`);
+        const results = await pollInboxes(deps({ copilotHome }), cfg, { apply: true });
+        for (const r of results) {
+          if (r.error) log(`shepherd: inbox ${r.account}: ${r.error}`);
+          for (const x of r.done ?? []) log(`shepherd: inbox ${r.account}: done ${x.repo} "${x.title}" [${x.reason}] ${x.why}`);
+        }
+        const n = results.reduce((sum, r) => sum + (r.done?.length ?? 0), 0);
+        if (!quiet && n) say(`inbox: ${n} agent-caused notification(s) marked done`);
       },
     },
   ];
