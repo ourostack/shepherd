@@ -126,6 +126,8 @@ Neither goes while it runs, waits on a person, is stuck, or while a session it c
 
 `shepherd retire plan` says what would happen and changes nothing. `shepherd retire apply` does it, and refuses unless the config enables it. The config is `~/.config/shepherd/retire.json` (`SHEPHERD_RETIRE_CONFIG` overrides the path): `{ "enabled": true }`.
 
+Under swap pressure (85% or more) the same duty also stops the runtime process of idle sessions, which frees about 150 MB per hosted session and archives nothing. A runtime is stopped only when every session it hosts has been idle for 2 hours, has no automation, open pull request or waiting question, coordinates no working session, and passes the landed-work check; sending the session a message loads it again. At most two runtimes go per pass, largest first.
+
 ## Wakes
 
 A wake is a message for a Copilot app session, sent because something outside the app is due: a new issue, a schedule, a relay. A wake runner is a command the watch runs on a cadence. The command decides what is worth a wake and prints one JSON value:

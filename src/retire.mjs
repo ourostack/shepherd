@@ -23,6 +23,8 @@ import { DELIVER_MS, archiveRow, identityId } from './store.mjs';
 import { deps } from './sessions.mjs';
 import { sendTo } from './socket.mjs';
 import { landedGate } from './landed.mjs';
+import { realProbes } from './responsiveness.mjs';
+import { realKill, realRuntimes, unloadIdle } from './unload.mjs';
 import { noticeOversizedSessions, whereItLeftOff } from './size-watch.mjs';
 
 export const HANDOFF_QUIET_MS = 5 * 60_000;
@@ -126,7 +128,7 @@ export async function retireSessions(listed, d, { apply = false } = {}) {
 // One pass of both duties over the sidebar: retire, then the size watch, as Ouroboros orders them. A failure in one does not stop
 // the other; a failure to list the sidebar stops both.
 export async function watchRetire(d, { apply = false } = {}) {
-  const out = { retire: [], size: [], errors: [] };
+  const out = { retire: [], size: [], unload: null, errors: [] };
   let listed;
   try {
     const mine = identityId(d);
@@ -137,6 +139,10 @@ export async function watchRetire(d, { apply = false } = {}) {
   }
   try { out.retire = await retireSessions(listed, d, { apply }); } catch (e) { out.errors.push(`retire: ${e.message}`); }
   try { out.size = (await noticeOversizedSessions(listed, d, { apply })).actions; } catch (e) { out.errors.push(`size watch: ${e.message}`); }
+  try {
+    const swapPct = await (d.swapPct ? d.swapPct() : realProbes(d).swapPct());
+    out.unload = await unloadIdle({ runtimes: await (d.runtimes ? d.runtimes() : realRuntimes()), listed, d, swapPct, apply }, d.kill ?? realKill);
+  } catch (e) { out.errors.push(`idle runtimes: ${e.message}`); }
   return out;
 }
 
