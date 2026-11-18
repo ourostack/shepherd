@@ -290,13 +290,13 @@ export interface RetireResult {
 /** The app's sidebar sessions with their state (throws ShepherdError when the app is not serving). */
 export function rows(deps: Deps, now?: number): Promise<AppSessionRow[]>;
 /** The retire config from retire.json (SHEPHERD_RETIRE_CONFIG overrides the path). No file: { enabled: false }. */
-export function retireConfig(file?: string): { enabled: boolean };
+export function retireConfig(file?: string): { enabled: boolean; idleLanded: boolean };
 export function retireFile(env?: Record<string, string | undefined>, home?: string): string;
 export function retireDeps(opts?: { copilotHome?: string; base?: Deps }): Deps & { tell(text: string): Promise<{ ok: boolean; error: string | null }> };
 /** Hand-off and orphan retirement over the sidebar's sessions. apply false decides and changes nothing. */
-export function retireSessions(listed: AppSessionRow[], deps: Deps, opts?: { apply?: boolean }): Promise<RetireAction[]>;
+export function retireSessions(listed: AppSessionRow[], deps: Deps, opts?: { apply?: boolean; idleLanded?: boolean }): Promise<RetireAction[]>;
 /** One pass of retirement then the size watch. apply false is a plan. */
-export function watchRetire(deps: Deps, opts?: { apply?: boolean }): Promise<RetireResult>;
+export function watchRetire(deps: Deps, opts?: { apply?: boolean; idleLanded?: boolean | 'plan' }): Promise<RetireResult>;
 /** Flags over-limit histories, asks for hand-offs, and archives idle giants. */
 export function noticeOversizedSessions(listed: AppSessionRow[], deps: Deps, opts?: { apply?: boolean }): Promise<{ nudged: number; archived: number; actions: RetireAction[] }>;
 export function whereItLeftOff(row: { id: string; branch?: string | null; projectRepo?: string | null }, deps: Deps): string;

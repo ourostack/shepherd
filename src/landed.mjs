@@ -92,12 +92,13 @@ export async function land(found, d) {
 
 // The gate in front of every archive: only a session whose work is on main goes. Returns null to go ahead, or the entry that
 // says why it stays. In a plan, unlanded work is reported as `land` (what apply would do); in apply it is landed and held.
-export async function landedGate(row, d, apply, reason) {
+export async function landedGate(row, d, apply, reason, { land: mayLand = true } = {}) {
   let found;
   try { found = await (d.checkLanded ? d.checkLanded(row, d) : checkLanded(row, d)); } catch (e) { found = { outcome: 'hold', why: `its work could not be checked (${e.message})` }; }
   if (found.outcome === 'clean') return null;
   const entry = (what, why, over = {}) => ({ what, id: row.id, name: row.name, reason, done: false, why, ...over });
   if (found.outcome === 'hold') return entry('hold', found.why, { reason: 'unlanded', pr: found.pr });
+  if (!mayLand) return entry('hold', found.why, { reason: 'unlanded' });
   if (!apply) return entry('land', `${found.why}: would commit, push and open a pull request with auto-merge, and archive once it merges`, { reason: 'unlanded' });
   const r = await (d.land ? d.land(found, d) : land(found, d));
   if (!r.ok) return entry('hold', r.why, { reason: 'unlanded', pr: r.url });
