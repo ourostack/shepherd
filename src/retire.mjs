@@ -32,6 +32,24 @@ import { realProbes } from './responsiveness.mjs';
 import { COORDINATOR_RECENT_MS, COORDINATOR_ROLE, realKill, realRuntimes, unloadIdle } from './unload.mjs';
 
 export { COORDINATOR_RECENT_MS };
+
+// The sessions Desk's issue drains send their wakes to: each drain's configured session, or the successor Desk recorded for it.
+// A live drain target is never archived, whatever its age; unreadable files mean no targets, never an error.
+export const drainsDir = (env = process.env, home = os.homedir()) => env.DESK_DRAINS_DIR || path.join(env.XDG_STATE_HOME || path.join(home, '.local', 'state'), 'ouroboros-skills', 'desk', 'drains');
+
+export function drainTargets(dir = drainsDir()) {
+  const read = (name) => { try { return JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')); } catch { return null; } };
+  const targets = new Set();
+  const state = read('state.json') ?? {};
+  for (const drain of Array.isArray(read('config.json')?.drains) ? read('config.json').drains : []) {
+    if (typeof drain?.session !== 'string') continue;
+    targets.add(drain.session);
+    const successor = state?.[drain.repo]?.successor;
+    if (successor?.from === drain.session && typeof successor.to === 'string') targets.add(successor.to);
+  }
+  return targets;
+}
+
 import { noticeOversizedSessions, whereItLeftOff } from './size-watch.mjs';
 
 export const HANDOFF_QUIET_MS = 5 * 60_000;
@@ -96,9 +114,15 @@ export async function retireSessions(listed, d, { apply = false, idleLanded = fa
   const entries = [];
   const gone = new Set();
   const gated = new Set();
+  const targets = d.drainTargets ? d.drainTargets() : drainTargets();
+  for (const row of listed) {
+    if (!targets.has(row.id) || !settled(row)) continue;
+    gated.add(row.id);
+    entries.push({ what: 'hold', id: row.id, name: row.name, reason: 'drain-target', done: false, why: 'held: an issue drain sends its wakes to this session' });
+  }
 
   for (const row of listed) {
-    if (!settled(row) || now - quietSince(row) < HANDOFF_QUIET_MS) continue;
+    if (gated.has(row.id) || !settled(row) || now - quietSince(row) < HANDOFF_QUIET_MS) continue;
     const direct = Object.entries(successions).find(([, entry]) => entry.predecessor === row.id && entry.turned)?.[0];
     if (!direct) continue;
     const successor = successorOf(row.id, successions);
