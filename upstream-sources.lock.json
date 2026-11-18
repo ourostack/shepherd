@@ -4,7 +4,7 @@
     {
       "id": "ourostack-ouro-ui-ax",
       "repository": "ourostack/ouro-ui",
-      "commit": "d0c7fed7759586b32ae8d364c3e63dac121a4d55",
+      "commit": "3394ac56470af18900182093e766ce25b0249e29",
       "license": "MIT",
       "files": [
         {
@@ -30,7 +30,7 @@
         {
           "sourcePath": "registry/ouro/ax/command.ts",
           "generatedPath": "lib/ouro-ui/registry/ouro/ax/command.ts",
-          "sha256": "f630829b90fd17009e55f2a226edc2225d0663425d63ca0ab7bca5cbd2247987"
+          "sha256": "0f2b7d0b8ff29bc23a8ff6e360da92f3eb7256b3b854b014b48b27b052ed5c43"
         },
         {
           "sourcePath": "registry/ouro/ax/component.ts",
