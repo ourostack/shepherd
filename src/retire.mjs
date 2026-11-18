@@ -185,7 +185,12 @@ export async function retireSessions(listed, d, { apply = false, idleLanded = fa
     const mainOnly = gate?.onDefault && pressure && now - quietSince(row) >= PRESSURE_MAIN_MS;
     if (gate && !mainOnly) { heldUntil.set(row.id, now + HELD_AGAIN_MS); entries.push(gate); continue; }
     const why = `idle ${Math.round((now - quietSince(row)) / 3_600_000)} h${recordedCoordinator(row) ? '' : ', no coordinator'}${mainOnly ? `, swap ${swapPct}% full; its folder keeps the changes it has on main (${gate.why})` : ''}; ${whereItLeftOff(row, d)}`;
-    if (apply && !(await doArchive(d, row, 'idle-landed', why))) continue;
+    if (apply && !(await doArchive(d, row, 'idle-landed', why))) {
+      // A refused archive (the app answers a cloud session whose task is already archived with 409) must not keep a slot in every pass, or the same few oldest sessions starve the rest.
+      heldUntil.set(row.id, now + HELD_AGAIN_MS);
+      entries.push({ what: 'hold', id: row.id, name: row.name, reason: 'archive-refused', done: false, why: 'the app did not archive it; tried again in 30 minutes' });
+      continue;
+    }
     gone.add(row.id);
     entries.push({ what: 'archive', id: row.id, name: row.name, reason: mainOnly ? 'swap-pressure' : 'idle-landed', done: apply, why });
   }
