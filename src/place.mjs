@@ -93,6 +93,12 @@ export function laptopBeat(d) {
   }));
 }
 
+// How to start a lane on the laptop. The app's create_session remote_host_id cannot target it, so this is the Agency Hub route: `mac session` posts the prompt to the laptop's own Copilot app. Config: { laptop: { hub, cwd, mac } }.
+export function laptopStart(d) {
+  const cfg = (readJson(placeConfigFile(), null) ?? readJson(at(d, CONFIG), {})).laptop ?? {};
+  return { route: 'hub', hub: cfg.hub ?? null, command: `${cfg.mac || './mac'} session laptop open ${cfg.cwd || '~/personal-desk'} '<prompt>' --agent desk:worker` };
+}
+
 export function liveProbes(d) {
   const base = realProbes(d);
   return { loadavg: base.loadavg, cores: base.cores, swapPct: () => base.swapPct().catch(() => null), laptop: () => laptopBeat(d) };
@@ -105,7 +111,7 @@ export async function place(d, { repo = null, local = false, miniOnly = false } 
   const laptop = laptopState(await probes.laptop(), now);
   const cloud = cloudState(d, repo, now);
   const answer = decide({ local, miniOnly, mini, laptop, cloud });
-  const result = { ...answer, repo, local, miniOnly, mini, laptop, cloud };
+  const result = { ...answer, repo, local, miniOnly, mini, laptop, cloud, ...(answer.place === 'laptop' ? { start: laptopStart(d) } : {}) };
   try {
     fs.mkdirSync(d.state, { recursive: true });
     fs.appendFileSync(at(d, LOG), `${JSON.stringify({ at: now, repo, local, miniOnly, place: answer.place, why: answer.why })}\n`);
@@ -161,7 +167,7 @@ export async function report(d, { days = 7 } = {}) {
 
 export function renderPlace(r) {
   const l = r.laptop.ready ? 'ready' : 'not ready';
-  return `${r.place}: ${r.why}\n  mini: ${r.mini.swapPct ?? '?'}% swap, load ${r.mini.load1 ?? '?'}/${r.mini.cores} cores; laptop: ${l}; cloud: ${r.cloud.blocked ? `blocked ${r.cloud.minutesLeft} more min` : 'open'}`;
+  return `${r.place}: ${r.why}\n  mini: ${r.mini.swapPct ?? '?'}% swap, load ${r.mini.load1 ?? '?'}/${r.mini.cores} cores; laptop: ${l}; cloud: ${r.cloud.blocked ? `blocked ${r.cloud.minutesLeft} more min` : 'open'}${r.start ? `\n  start: ${r.start.command}${r.start.hub ? ` (hub device ${r.start.hub})` : ''}` : ''}`;
 }
 
 export function renderReport(r) {
