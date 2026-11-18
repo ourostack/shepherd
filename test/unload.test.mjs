@@ -107,6 +107,8 @@ test('a heavy runtime (by footprint, not rss) goes after 15 quiet minutes, even 
   assert.equal(heavy.stop[0].footprintMb, 17000);
   const light = await planUnload({ runtimes: [{ pid: 1, rssMb: 300, footprintMb: 400, sessions: ['a', 'k'] }], listed, d: d(), swapPct: 95 });
   assert.equal(light.stop.length, 0);
+  const mid = await planUnload({ runtimes: [{ pid: 1, rssMb: 300, footprintMb: 1200, sessions: ['a', 'k'] }], listed, d: d(), swapPct: 95 });
+  assert.equal(mid.stop.length, 1, 'a 1.2 GB coordinator runtime quiet for 20 minutes goes');
   const busy = await planUnload({ runtimes: [{ pid: 1, rssMb: 300, footprintMb: 17000, sessions: ['a', 'k'] }], listed: [...listed, row('w', { parentSessionId: 'a', isRunning: true, state: 'busy' })], d: d(), swapPct: 95 });
   assert.equal(busy.stop.length, 0);
   const recent = await planUnload({ runtimes: [{ pid: 1, rssMb: 300, footprintMb: 17000, sessions: ['k'] }], listed: [row('k', { lastActivity: mins(5), updatedAt: mins(5) })], d: d(), swapPct: 95 });
