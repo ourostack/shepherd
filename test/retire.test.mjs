@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { COORDINATOR_RECENT_MS, FINISHED_IDLE_MS, HANDOFF_QUIET_MS, IDLE_LANDED_MS, IDLE_LANDED_PER_PASS, census, childrenNote, retireConfig, retireSessions, watchRetire } from '../src/retire.mjs';
+import { COORDINATOR_RECENT_MS, FINISHED_IDLE_MS, HANDOFF_QUIET_MS, IDLE_LANDED_MS, IDLE_LANDED_PER_PASS, census, childrenNote, drainTargets, retireConfig, retireSessions, watchRetire } from '../src/retire.mjs';
 import { fakeApp, iso, NOW, row, sessionHistory, testDeps, working } from './fake-sidebar.mjs';
 
 const P = 'aaaaaaaa-0000-4000-8000-000000000001';
@@ -348,4 +348,20 @@ test('landed check: a work organization or work user repository is fetched and l
   assert.ok(!accounts.some((a) => a.endsWith('personal')));
   const failed = scripted({ ...REPO, 'git fetch': { code: 1 }, 'git remote get-url origin': 'https://github.com/gim-home/CIT.git' });
   assert.equal((await checkLanded(wsRow(), { landDeps: failed.landDeps })).outcome, 'hold');
+});
+
+test('a session a drain sends its wakes to, configured or recorded as successor, is never archived', async () => {
+  const home = tmp('retire-');
+  handedOff(home);
+  const dir = tmp('drains-');
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ drains: [{ repo: 'o/r', session: P }] }));
+  const d = testDeps(home, { app: fakeApp() });
+  d.drainTargets = () => drainTargets(dir);
+  const listed = [row(P, quiet), row(S, { lastActivity: iso(NOW), updatedAt: iso(NOW) })];
+  const out = await retireSessions(listed, d, { apply: true });
+  assert.deepEqual(out.filter((e) => e.what === 'archive'), []);
+  assert.equal(out.find((e) => e.id === P).reason, 'drain-target');
+  fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify({ 'o/r': { successor: { from: P, to: ORPHAN } } }));
+  assert.deepEqual([...drainTargets(dir)].sort(), [P, ORPHAN].sort());
+  assert.deepEqual([...drainTargets(path.join(dir, 'missing'))], []);
 });
