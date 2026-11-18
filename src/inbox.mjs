@@ -101,6 +101,7 @@ export function judge(n, facts, cfg, keep = []) {
   const label = (facts.labels ?? []).map(lower).find((l) => cfg.keepLabels.includes(l));
   if (label) return keepIt('keep-label', `it is labelled ${label}`);
 
+  if (COMMENT_REASONS.includes(n.reason) && facts.bodyIsLatest) facts = { ...facts, commentUser: facts.author };
   if (COMMENT_REASONS.includes(n.reason) && !facts.commentUser) return keepIt('unknown', 'its latest unread comment could not be read');
   const author = classify(facts.author, cfg);
   if (n.reason === 'review_requested') {
@@ -139,6 +140,9 @@ async function facts(n, api) {
     const at = Date.parse(c.created_at ?? c.submitted_at ?? '');
     const read = Date.parse(n.last_read_at ?? '');
     if (!(read && at && at <= read)) out.commentUser = c.user ?? null;
+  } else if (n.subject.latest_comment_url) {
+    // The notification's latest "comment" is the issue or pull request itself, so its author wrote what is unread.
+    out.bodyIsLatest = true;
   }
   return out;
 }

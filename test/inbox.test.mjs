@@ -12,9 +12,9 @@ const user = (login, type = 'User') => ({ login, type });
 
 let nextId = 1;
 // A notification and the pull request / comment behind it.
-function thread({ reason, type = 'PullRequest', author = user(ME), closedBy, comment, labels = [], lastRead, repo = 'o/r', title = 'a change' }) {
+function thread({ reason, type = 'PullRequest', author = user(ME), closedBy, comment, bodyLatest, labels = [], lastRead, repo = 'o/r', title = 'a change' }) {
   const id = String(nextId++);
-  const n = { id, reason, updated_at: '2026-11-18T08:00:00Z', last_read_at: lastRead ?? null, repository: { full_name: repo }, subject: { type, title, url: `https://api.github.com/repos/${repo}/pulls/${id}`, latest_comment_url: comment ? `https://api.github.com/repos/${repo}/issues/comments/${id}` : null } };
+  const n = { id, reason, updated_at: '2026-11-18T08:00:00Z', last_read_at: lastRead ?? null, repository: { full_name: repo }, subject: { type, title, url: `https://api.github.com/repos/${repo}/pulls/${id}`, latest_comment_url: bodyLatest ? `https://api.github.com/repos/${repo}/pulls/${id}` : comment ? `https://api.github.com/repos/${repo}/issues/comments/${id}` : null } };
   const objects = { [n.subject.url]: { number: Number(id), user: author, labels: labels.map((name) => ({ name })), merged_by: closedBy ?? null } };
   if (comment) objects[n.subject.latest_comment_url] = { user: comment.user, created_at: comment.at ?? '2026-11-18T07:00:00Z' };
   return { n, objects };
@@ -96,10 +96,12 @@ test('a comment or mention by a bot or the owner on their own thread is marked d
     thread({ reason: 'mention', author: user(ME), comment: { user: user(ME) } }),
     thread({ reason: 'comment', author: user('aurokin'), comment: { user: user('github-actions[bot]', 'Bot') } }),
     thread({ reason: 'comment', author: user(ME) }),
+    thread({ reason: 'comment', type: 'Issue', author: user('github-actions[bot]', 'Bot'), bodyLatest: true }),
+    thread({ reason: 'comment', type: 'Issue', author: user('somebody'), bodyLatest: true }),
   ];
   const { r } = await run(ts);
-  assert.equal(r.done.length, 2);
-  assert.deepEqual(r.kept.map((k) => k.rule).sort(), ['human-author', 'unknown']);
+  assert.equal(r.done.length, 3);
+  assert.deepEqual(r.kept.map((k) => k.rule).sort(), ['human-author', 'human-author', 'unknown']);
 });
 
 test('a person\'s comment, merge, close or pull request keeps an otherwise automatic thread', async () => {
