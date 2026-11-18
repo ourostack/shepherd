@@ -22,6 +22,7 @@ const TYPES = {
 };
 const KICKOFF_KEYS = ['prompt', 'mode', 'model', 'agent', 'reasoning_effort', 'permission_mode'];
 const AS_USER = ['as-user', 'as_user', "Send the owner's own relayed words, labelled, as a user prompt instead of a peer message."];
+const AUDIENCE = 'the session it names and whoever reads it in the app';
 const NAME = ['name', 'name', 'The title.'];
 
 // Each verb: what it does, whether it only reads, the positional argument's tool key (if any), its value flags
@@ -153,8 +154,7 @@ export function agentCommands({ guard, copilotHome }) {
       name: verb,
       summary: spec.summary,
       effect: spec.read ? 'private' : 'others',
-      ...(spec.read ? {} : { why: 'optional' }),
-      args: spec.positional ? [{ name: 'id', required: true, unless: 'input', source: spec.positional === 'session_id' ? 'sessions' : spec.summary.startsWith('Run') ? 'workflows' : 'sessions', description: spec.positional === 'session_id' ? 'The session: its whole id, or the first 8 or more characters of it.' : 'The id, as shepherd lists it.' }] : [],
+      args: spec.positional ? [{ name: 'id', source: spec.positional === 'session_id' ? 'sessions' : spec.summary.startsWith('Run') ? 'workflows' : 'sessions', description: spec.positional === 'session_id' ? 'The session: its whole id, or the first 8 or more characters of it.' : 'The id, as shepherd lists it.' }] : [],
       flags,
       output: '{ ok, … } as the operation answers; { ok: false, code, error } with the reason when the app refused or did not answer',
       exit: (r) => (failed(r) ? 'error' : 'ok'),
@@ -163,11 +163,16 @@ export function agentCommands({ guard, copilotHome }) {
         action: verb,
         state: 'planned',
         effect: 'others',
-        audience: { only: false, who: 'the session it names and whoever reads it in the app' },
-        summary: `Would run shepherd ${verb}${input.id ? ` on ${input.id}` : ''}: ${spec.summary} Nothing was sent.`,
+        audience: { only: false, who: AUDIENCE },
+        summary: `Would run shepherd ${verb}${input.id ? ` on ${input.id}` : ''}: ${spec.summary} Nothing was sent. ${AUDIENCE[0].toUpperCase()}${AUDIENCE.slice(1)} will see it.`,
       }),
       async run(input, ctx) {
         const args = toolArgs(verb, input);
+        // Checked here, after --why, so a call without both is told about --why first.
+        if (spec.positional && args[spec.positional] === undefined) {
+          const source = spec.positional === 'session_id' ? 'sessions' : 'workflows';
+          throw new AxError({ code: 'missing-arg', exit: 2, thing: verb, problem: `needs <id> (or --input with ${spec.positional})`, fix: `shepherd ${source}, then shepherd ${verb} <id>` });
+        }
         try {
           return await guard(verb, () => runOperation(verb, args, deps({ copilotHome: copilotHome(input) })));
         } catch (e) {

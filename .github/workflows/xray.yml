@@ -33,20 +33,17 @@ jobs:
           node scripts/inventory.mjs > inventory.json
           node lib/ouro-ui/registry/ouro/ax/xray.ts --cli "node bin/shepherd.mjs" --inventory inventory.json \
             --home "$XRAY_HOME" --env "SHEPHERD_XRAY_APP=http://127.0.0.1:$PORT" --env "RUNNER_TEMP=$RUNNER_TEMP" \
-            --guard "node scripts/assert-mock.mjs" --state "help --json" --commit "$GITHUB_SHA" \
+            --guard "node scripts/assert-mock.mjs" --sample conversation=a3000000-0000-4000-8000-000000000003 --state "help --json" --commit "$GITHUB_SHA" \
             --json --md xray/xray.md > xray/report.json || true
           kill $FIXTURE
-      # Ouroboros calls the agent verbs with no --why and the id inside --input, so four must claims (others-need-why,
-      # others-preview, wrong-ref-first, wait-on-refs) cannot hold without breaking it. The gate holds the rest from slipping.
       - name: Gate on the must claims
         if: always()
         run: |
           node -e '
             const r = JSON.parse(require("fs").readFileSync("xray/report.json", "utf8"));
             const { must, mustHolding } = r.summary;
-            const floor = 10;
-            if (!(must > 0) || mustHolding < floor) {
-              console.error(`must claims holding: ${mustHolding} of ${must}; at least ${floor} have to hold`);
+            if (!(must > 0) || mustHolding < must || r.summary.mustSkipped > 0) {
+              console.error(`must claims holding: ${mustHolding} of ${must} (${r.summary.mustSkipped} skipped); every one has to hold`);
               process.exit(1);
             }
             console.log(`must claims holding: ${mustHolding} of ${must}`);

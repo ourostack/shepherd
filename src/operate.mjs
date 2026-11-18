@@ -260,8 +260,8 @@ export async function create(d, args) {
   const prompt = str(kickoff.prompt);
   const name = str(args.name);
   const project = str(args.project_id);
-  const chat = args.session_kind === 'chat' || (!project && args.session_kind !== 'project');
-  if (!chat && !project) throw new ShepherdError({ code: 'no-project', problem: 'a project session needs a project (its id or name; shepherd sessions shows project_id on its sessions)', fix: 'pass --project <id or name>, or --session-kind chat for a standalone chat' });
+  const chat = args.session_kind === 'chat';
+  if (!chat && !project) throw new ShepherdError({ code: 'no-project', problem: 'a session needs a project (its id or name; shepherd sessions shows project_id on its sessions)', fix: 'pass --project <id or name>, or --session-kind chat for a standalone chat' });
   const settleCreate = (reply, requestId) => (reply.request_id === requestId ? (reply.type === 'session_created' ? 'ok' : 'fail') : 'ignore');
   let created;
   if (chat) {

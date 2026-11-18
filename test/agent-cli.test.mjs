@@ -25,9 +25,11 @@ const lane = (id, sessionId, over = {}) => ({
 });
 
 // The CLI as a child process (async, so the in-process app can answer it), with HOME in the test's folder for its state.
-function cli(args, { home, stdin = null }) {
+const ACTIONS = ['send', 'create', 'answer', 'plan', 'archive', 'automation', 'run-workflow'];
+function cli(args, { home, stdin = null, why = true }) {
+  const argv = why && ACTIONS.includes(args[0]) ? [...args, '--why', 'a test asked for it'] : args;
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [bin, ...args], { env: { ...process.env, HOME: home } });
+    const child = spawn(process.execPath, [bin, ...argv], { env: { ...process.env, HOME: home } });
     let stdout = '', stderr = '';
     child.stdout.on('data', (c) => { stdout += c; });
     child.stderr.on('data', (c) => { stderr += c; });
@@ -225,4 +227,29 @@ test('a bad agent verb is a usage error with the fix, and an app that is not run
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
+});
+
+test('an action refuses without --why before it looks for the id, and a missing id says where to get one', async () => {
+  await withApp(async ({ appHome, home }) => {
+    const noWhy = await cli(['send', '--json', '--copilot-home', appHome], { home, why: false });
+    assert.equal(noWhy.status, 2);
+    assert.match(noWhy.stderr, /needs --why/);
+    const noId = await cli(['send', '--json', '--copilot-home', appHome], { home });
+    assert.equal(noId.status, 2);
+    assert.match(noId.stderr, /needs <id>.*Fix: shepherd sessions, then shepherd send <id>/);
+    const noTarget = await cli(['create', '--json', '--copilot-home', appHome], { home });
+    assert.equal(noTarget.status, 1);
+    assert.match(noTarget.stderr, /needs a project.*--session-kind chat/);
+  });
+});
+
+test('shepherd watch <id> waits on a session and, when nothing happens in time, exits 3 with the command that resumes', async () => {
+  await withApp(async ({ appHome, home }) => {
+    const r = await cli(['watch', IDLE, '--timeout', '100ms', '--json', '--copilot-home', appHome], { home });
+    assert.equal(r.status, 3, r.stdout + r.stderr);
+    const w = json(r);
+    assert.equal(w.ax, 'wait/1');
+    assert.equal(w.state, 'timed-out');
+    assert.match(w.resume.command, new RegExp(`^shepherd watch ${IDLE} --timeout 100ms --cursor`));
+  });
 });
