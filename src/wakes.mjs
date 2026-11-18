@@ -254,25 +254,45 @@ export async function runWakeRunner(runner, deps, previous = {}) {
   return state;
 }
 
-// Runs the runners named in `only` (all by default) and writes their states. A runner dropped from the config loses its state.
+// Runs the runners named in `only` (all by default) at the same time, so a slow one never holds up the rest, and writes their states.
+// Each state goes into the file as it is when the runner ends, so runners that finish at different times keep each other's states.
+// A runner dropped from the config loses its state.
 export async function runWakeRunners(stateDir, runners, deps, only) {
   const file = wakeStateFile(stateDir);
-  const stored = readJson(file, {});
-  const states = Object.fromEntries(runners.map((runner) => [runner.name, stored[runner.name] ?? {}]));
-  for (const runner of runners) if (!only || only.has(runner.name)) states[runner.name] = await runWakeRunner(runner, deps, stored[runner.name]);
-  writeJson(file, states);
-  return states;
+  const before = readJson(file, {});
+  const chosen = runners.filter((runner) => !only || only.has(runner.name));
+  const ended = new Map();
+  if (!chosen.length) writeJson(file, Object.fromEntries(runners.map((r) => [r.name, before[r.name] ?? {}])));
+  await Promise.all(chosen.map(async (runner) => {
+    const state = await runWakeRunner(runner, deps, before[runner.name]);
+    ended.set(runner.name, state);
+    const stored = readJson(file, {});
+    writeJson(file, Object.fromEntries(runners.map((r) => [r.name, ended.get(r.name) ?? stored[r.name] ?? {}])));
+  }));
+  return Object.fromEntries(runners.map((runner) => [runner.name, ended.get(runner.name) ?? before[runner.name] ?? {}]));
 }
 
-// The watch's pass: runs the runners that are due, each at its own everySeconds, and returns the states of those that ran.
+export const WAKE_PASS_WAIT_MS = 20000;
+const inflight = new WeakMap();
+
+// The watch's pass: starts the runners that are due, each at its own everySeconds, at the same time, and returns the states of those
+// that finished within WAKE_PASS_WAIT_MS. A runner still going then carries on in the background and is not started again until it ends,
+// so a runner that takes minutes (a wake to a session that loads slowly) never delays the others' next poll.
 // `due` remembers each runner's next run between passes.
-export async function runDueWakes(d, runners, due, now = d.now()) {
-  const ready = new Set(runners.filter((runner) => (due.get(runner.name) ?? 0) <= now).map((runner) => runner.name));
-  let ran = {};
-  if (ready.size) {
-    const states = await runWakeRunners(d.state, runners, runnerDeps(d, now), ready);
-    ran = Object.fromEntries([...ready].map((name) => [name, states[name]]));
-  }
+export async function runDueWakes(d, runners, due, now = d.now(), waitMs = WAKE_PASS_WAIT_MS) {
+  const busy = inflight.get(due) ?? inflight.set(due, new Set()).get(due);
+  const ready = new Set(runners.filter((runner) => (due.get(runner.name) ?? 0) <= now && !busy.has(runner.name)).map((runner) => runner.name));
+  const ran = {};
+  const runs = [...ready].map((name) => {
+    busy.add(name);
+    return runWakeRunners(d.state, runners, runnerDeps(d, now), new Set([name]))
+      .then((states) => { ran[name] = states[name]; })
+      .catch(() => {})
+      .finally(() => busy.delete(name));
+  });
+  let timer;
+  if (runs.length) await Promise.race([Promise.all(runs), new Promise((resolve) => { timer = setTimeout(resolve, waitMs); })]);
+  clearTimeout(timer);
   for (const runner of runners) if (ready.has(runner.name)) due.set(runner.name, now + runner.everySeconds * 1000);
   for (const name of [...due.keys()]) if (!runners.some((runner) => runner.name === name)) due.delete(name);
   return ran;
