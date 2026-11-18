@@ -87,7 +87,19 @@ test('a human\'s mention is never marked done', async () => {
   const { r, api } = await run(ts);
   assert.deepEqual(api.calls.done, []);
   assert.equal(r.kept.length, 4);
-  assert.ok(r.kept.every((k) => k.rule === 'reason'));
+  assert.deepEqual(r.kept.map((k) => k.rule).sort(), ['human-comment', 'human-comment', 'reason', 'reason']);
+});
+
+test('a comment or mention by a bot or the owner on their own thread is marked done; a person\'s thread or a lost comment stays', async () => {
+  const ts = [
+    thread({ reason: 'comment', type: 'Issue', author: user('github-actions[bot]', 'Bot'), comment: { user: user('github-actions[bot]', 'Bot') } }),
+    thread({ reason: 'mention', author: user(ME), comment: { user: user(ME) } }),
+    thread({ reason: 'comment', author: user('aurokin'), comment: { user: user('github-actions[bot]', 'Bot') } }),
+    thread({ reason: 'comment', author: user(ME) }),
+  ];
+  const { r } = await run(ts);
+  assert.equal(r.done.length, 2);
+  assert.deepEqual(r.kept.map((k) => k.rule).sort(), ['human-author', 'unknown']);
 });
 
 test('a person\'s comment, merge, close or pull request keeps an otherwise automatic thread', async () => {
@@ -146,7 +158,7 @@ test('a failed workflow run (ci_activity on a CheckSuite) is marked done and log
   assert.deepEqual(api.calls.done, [suite.n.id, run2.n.id]);
   assert.equal(r.done[0].rule, 'ci-run');
   assert.match(r.done[0].why, /red-main/);
-  assert.equal(r.kept[0].rule, 'reason');
+  assert.equal(r.kept[0].rule, 'subject');
   assert.equal(fs.readFileSync(path.join(d.state, 'inbox-log.jsonl'), 'utf8').trim().split('\n').length, 2);
 });
 
