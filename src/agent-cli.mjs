@@ -131,6 +131,7 @@ export function toolArgs(verb, input) {
 
 // The text form: one line per session or message, otherwise the result as indented JSON.
 export function renderText(verb, result) {
+  if (result.note && result.followed_from && verb === 'send') return `${result.note}\n${JSON.stringify(result, null, 2)}`;
   if (verb === 'sessions' && result.sessions) return result.sessions.map((s) => `${s.id.slice(0, 8)}  ${s.name}  ${s.activity.status} (${s.activity.why})`).join('\n') || 'no sessions';
   if (verb === 'session' && result.id) return `${result.id.slice(0, 8)}  ${result.name}  ${result.activity.status} (${result.activity.why})`;
   if (verb === 'messages' && result.messages) return result.messages.map((m) => `${m.role}: ${m.text}`).join('\n') || 'no messages';

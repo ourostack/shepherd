@@ -29,6 +29,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { ShepherdError } from './error.mjs';
 import { sendTo } from './socket.mjs';
+import { followSession } from './operate.mjs';
+import { rows } from './rows.mjs';
 import { readJson, writeJson } from './store.mjs';
 
 export const WAKE_DEFAULT_SECONDS = 300;
@@ -176,9 +178,12 @@ export function wakeDelivered(d, id, text, sinceMs) {
 
 // Sends one wake. A wake that names what it replaces takes the older queued ones back first, and still goes out when that fails.
 export const wakeSender = (d) => async (session, message, delivery, replaces) => {
-  if (replaces) await withdrawQueued(d, session, replaces).catch(() => 0);
-  const sent = await sendTo(d, session, message, WAKE_SEND_MS, delivery);
-  if (sent.ok) return { ok: true, error: null };
+  // A wake aimed at a session that was handed off goes to its live successor; any trouble finding one sends to the id as named.
+  const found = await rows(d).then((listed) => followSession(d, listed, session)).catch(() => null);
+  const target = found?.from ? found.row.id : session;
+  if (replaces) await withdrawQueued(d, target, replaces).catch(() => 0);
+  const sent = await sendTo(d, target, message, WAKE_SEND_MS, delivery);
+  if (sent.ok) return { ok: true, error: null, ...(found?.from ? { note: found.note } : {}) };
   return { ok: false, error: sent.error ?? (sent.reply === 'no reply' ? 'the app did not answer in time' : null) };
 };
 

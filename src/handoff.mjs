@@ -15,6 +15,7 @@ const FREE_TEXT_OPENING_CHARS = 2000;
 const FREE_TEXT_ID_WINDOW = 240;
 export const FIRST_MESSAGE_SCAN_BYTES = 1024 * 1024;
 
+export const readLineage = (d) => readJson(statePath(d, 'lineage'), { sessions: {} }).sessions || {};
 export const readSuccessions = (d) => readJson(statePath(d, 'successions'), { sessions: {} }).sessions || {};
 
 // The session a first message says it succeeds: the Succeeds line, else the older wording. `known` resolves a short id.
@@ -79,9 +80,21 @@ export function refreshSuccessions(d, listed, { write = true } = {}) {
     if (entry.predecessor && turned) entry.turned = true;
     next[id] = entry;
   }
-  if (write) writeJson(statePath(d, 'successions'), { sessions: next });
+  if (write) {
+    writeJson(statePath(d, 'successions'), { sessions: next });
+    // Lineage outlives the sidebar: a session archived after a hand-off is still how its predecessor's id finds the live end.
+    const lineage = readLineage(d);
+    for (const [id, entry] of Object.entries(next)) if (entry.predecessor) lineage[id] = { predecessor: entry.predecessor, ...(entry.at ? { at: entry.at } : {}) };
+    writeJson(statePath(d, 'lineage'), { sessions: lineage });
+  }
   return next;
 }
+
+// Every session that names `of` as its predecessor, newest first.
+export const claimants = (of, successions) => Object.entries(successions)
+  .filter(([, entry]) => entry.predecessor === of)
+  .map(([id, entry]) => ({ id, at: Date.parse(String(entry.at)) || 0 }))
+  .sort((a, b) => b.at - a.at);
 
 // The newest session that took over `id`'s job, following hand-offs to the live end; null when none did.
 export function successorOf(id, successions) {
