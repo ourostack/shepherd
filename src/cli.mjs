@@ -16,6 +16,7 @@ import { judge as judgeResponsiveness, readReadings as readResponsiveness, rende
 import { renderRetire, retireConfig, retireDeps, retireFile, watchRetire } from './retire.mjs';
 import { counts, healthDeps, pass, readWatch, renderWatch } from './health-watch.mjs';
 import { install } from './install.mjs';
+import { blockCloud, clearCloud, place, renderPlace, renderReport, report } from './place.mjs';
 import { renderQuota, renderReadings } from './quota.mjs';
 import { runResident, watchDuties } from './resident.mjs';
 import { agentCommands } from './agent-cli.mjs';
@@ -212,6 +213,31 @@ export const COMMANDS = [
       const d = deps({ copilotHome: copilotHome(input) });
       const r = apply ? await trustAll(d) : { trusted: await untrusted(d), skipped: null };
       return withText({ enabled, file, applied: apply, projects: r.trusted, skipped: r.skipped }, lines(!enabled ? `auto-trust is off: ${file} does not say "enabled": true` : null, r.skipped, !r.trusted.length ? 'every local repository project is trusted' : null, r.trusted.map((p) => `${apply ? 'trusted' : 'would trust'}  ${p.name}  (${p.id})`)));
+    },
+  }),
+  command({
+    name: 'place', summary: 'where a lane should run: cloud, mini or laptop, with a one-line reason; report counts where the last days\' lanes ran; cloud-blocked and cloud-open record a cloud 403 window', effect: 'private',
+    args: [sub('place', ['ask', 'report', 'cloud-blocked', 'cloud-open'], 'ask')],
+    flags: {
+      repo: { type: 'string', placeholder: '<owner/name>', description: 'the lane\'s repository (for a repository\'s cloud 403 window)' },
+      local: { type: 'boolean', description: 'the lane needs local tools or state, so cloud is not an answer' },
+      'mini-only': { type: 'boolean', description: 'the lane needs state only the mini has: the answer is the mini' },
+      minutes: { type: 'number', min: 1, placeholder: '<minutes>', description: 'cloud-blocked: how long the 403 window lasts (60 by default)' },
+      days: { type: 'number', min: 1, placeholder: '<days>', description: 'report: how many days back (7 by default)' },
+    },
+    output: 'ask: { place, why, repo, local, miniOnly, mini, laptop, cloud }; report: { days, lanes, cloud, mini, remote, neededLocal, couldCloud, noHistory, byCoordinator, placements }; cloud-blocked: { until, repo }',
+    exit: () => 'ok',
+    text: (r) => textOf(r),
+    async run(input) {
+      takes('place', ['ask', 'report', 'cloud-blocked', 'cloud-open'], input.action, 'shepherd place --local');
+      const d = deps({ copilotHome: copilotHome(input) });
+      const id = input.action ?? 'ask';
+      const repo = input.repo ?? null;
+      if (id === 'report') { const r = await report(d, { days: input.days }); return withText(r, renderReport(r)); }
+      if (id === 'cloud-blocked') { const b = blockCloud(d, { repo, minutes: input.minutes }); return withText(b, `cloud is blocked ${repo ? `for ${repo}` : 'for every repository'} until ${new Date(b.until).toISOString()}`); }
+      if (id === 'cloud-open') { const kept = clearCloud(d, { repo }); return withText({ blocks: kept }, `cloud 403 windows left: ${kept.length}`); }
+      const r = await place(d, { repo, local: input.local === true, miniOnly: input['mini-only'] === true });
+      return withText(r, renderPlace(r));
     },
   }),
   command({
