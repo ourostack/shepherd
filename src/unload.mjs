@@ -1,4 +1,4 @@
-// Under swap pressure, free the memory of idle sessions without archiving them. Each session runtime (one process the app
+// Under memory pressure, free the memory of idle sessions without archiving them. Each session runtime (one process the app
 // starts per session, or one shared by a coordinator and the sessions it created) carries its own MCP servers and extensions,
 // roughly 150 MB per hosted session. A runtime whose hosted sessions are all archived, or long idle with their work on main, is stopped;
 // sending the session a message makes the app load it again, so nothing is lost. A runtime that hosts any running, recent,
@@ -9,7 +9,7 @@ import { landedGate } from './landed.mjs';
 
 // A runtime whose real footprint (not its resident size: the OS compresses and swaps the rest) is bloatMb or more is a heavy
 // one: it goes after bloatIdleMs of quiet, and a coordinator role or a recent child no longer holds it.
-export const UNLOAD = { swapPct: 85, idleMs: 2 * 3600000, perPass: 6, bloatMb: 1000, bloatIdleMs: 15 * 60000 };
+export const UNLOAD = { idleMs: 2 * 3600000, perPass: 6, bloatMb: 1000, bloatIdleMs: 15 * 60000 };
 /** A session that made another within this long is a live coordinator, whatever its children are doing now. */
 export const COORDINATOR_RECENT_MS = 24 * 3_600_000;
 export const COORDINATOR_ROLE = /coordinator|ouro ui|desk epoch|orchestrat/i;
@@ -37,8 +37,8 @@ export function holdReason(row, listed, now, t = UNLOAD, bloated = false) {
 
 // Plan: which runtimes would be stopped now. `runtimes`: [{ pid, rssMb, sessions: [id] }].
 // `archived`: ids the app has archived. An archived session needs no runtime, so it does not hold one.
-export async function planUnload({ runtimes, listed, d, swapPct, now = d.now(), t = UNLOAD, apply = false, archived = new Set() }) {
-  if (swapPct === null || swapPct < t.swapPct) return { pressure: false, swapPct, stop: [], keep: [] };
+export async function planUnload({ runtimes, listed, d, stress, now = d.now(), t = UNLOAD, apply = false, archived = new Set() }) {
+  if (!stress?.stressed) return { pressure: false, stress, stop: [], keep: [] };
   const byId = new Map(listed.map((r) => [r.id, r]));
   const stop = [];
   const keep = [];
@@ -59,7 +59,7 @@ export async function planUnload({ runtimes, listed, d, swapPct, now = d.now(), 
     }
     (why ? keep : stop).push({ pid: rt.pid, rssMb: rt.rssMb, ...(rt.footprintMb ? { footprintMb: rt.footprintMb } : {}), sessions: rt.sessions.length, ...(why ? { why } : {}) });
   }
-  return { pressure: true, swapPct, stop: stop.slice(0, t.perPass), keep, apply };
+  return { pressure: true, stress, stop: stop.slice(0, t.perPass), keep, apply };
 }
 
 export async function unloadIdle(args, kill) {

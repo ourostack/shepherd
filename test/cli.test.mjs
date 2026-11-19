@@ -135,6 +135,19 @@ test('shepherd quota and watch --every: bad arguments are usage errors; quota st
   }
 });
 
+test('the version the CLI reports is never behind a release tag, and matches the tag it is built from', () => {
+  const git = (...args) => spawnSync('git', args, { encoding: 'utf8', cwd: path.dirname(bin) });
+  const { version } = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  const num = (v) => v.replace(/^v/, '').split('.').map(Number);
+  const cmp = (x, y) => { for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; };
+  const tags = git('tag', '--list', 'v*').stdout.split('\n').filter((t) => /^v\d+\.\d+\.\d+$/.test(t));
+  if (!tags.length) return;
+  const latest = tags.sort((x, y) => cmp(num(x), num(y))).at(-1);
+  assert.ok(cmp(num(version), num(latest)) >= 0, `package.json says ${version} but ${latest} is tagged: bump the version in the release commit, so \`shepherd --version\` shows what was deployed`);
+  const here = git('describe', '--tags', '--exact-match', 'HEAD').stdout.trim();
+  if (/^v\d+\.\d+\.\d+$/.test(here)) assert.equal(version, here.slice(1));
+});
+
 test('shepherd version and --version print the package version; --json prints it as JSON', () => {
   const { version } = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   for (const v of ['version', '--version']) { const r = run([v]); assert.equal(r.status, 0); assert.equal(r.stdout.trim(), version); }

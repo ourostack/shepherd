@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { judge, percentile, readReadings, sample } from '../src/responsiveness.mjs';
+import { judge, memoryStress, percentile, readReadings, readStress, sample } from '../src/responsiveness.mjs';
 
 const probes = (over = {}) => ({
   loadavg: () => [12.34, 10, 9],
@@ -65,4 +65,16 @@ test('the swap-in rate comes from the counter since the last reading, and a coun
 test('a Mac with swap nearly full but no pressure and no swap-ins is on target', () => {
   const calm = Array.from({ length: 20 }, (_, i) => ({ at: i, load1: 40, swapPct: 97, pressure: 1, swapInsPerSec: 0, gitMs: [30], appMs: 10 }));
   assert.equal(judge(calm).ok, true);
+});
+
+test('readStress measures the swap-in rate over its window and leaves a failed probe unknown', async () => {
+  let counter = 0;
+  const p = { ...probes(), loadavg: () => [40.04, 0, 0], swapIns: async () => (counter += 4000) };
+  const waits = [];
+  const s = await readStress(p, 2000, async (ms) => { waits.push(ms); });
+  assert.deepEqual(waits, [2000]);
+  assert.deepEqual([s.swapInsPerSec, s.load1, s.stressed], [2000, 40, true]);
+  const down = await readStress({ ...p, pressure: async () => { throw new Error('no sysctl'); }, swapIns: async () => { throw new Error('no vm_stat'); } }, 2000, async () => {});
+  assert.deepEqual([down.pressure, down.swapInsPerSec, down.stressed], [null, null, false]);
+  assert.equal(memoryStress({ pressure: 4 }).why, 'memory pressure critical');
 });

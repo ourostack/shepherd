@@ -12,6 +12,32 @@ import path from 'node:path';
 import { appReady } from './socket.mjs';
 
 export const TARGETS = { appMs: 2000, gitMs: 1000, pressure: 4, swapInsPerSec: 1000 };
+// When the Mac is short of memory right now, as the duties that shed load judge it (swap fullness is not a signal):
+// the pressure level is warning or critical, pages are swapped in at the bar's rate, or they are swapped in steadily
+// while the load is high.
+export const STRESS = { pressure: 2, swapInsPerSec: TARGETS.swapInsPerSec, busySwapIns: 200, loadPerCore: 1.5 };
+export function memoryStress({ pressure = null, swapInsPerSec = null, load1 = null, cores = 1 } = {}, t = STRESS) {
+  const why = [];
+  if (pressure !== null && pressure >= t.pressure) why.push(`memory pressure ${pressure === 2 ? 'warning' : 'critical'}`);
+  if (swapInsPerSec !== null && swapInsPerSec >= t.swapInsPerSec) why.push(`${swapInsPerSec} pages a second swapped in`);
+  else if (swapInsPerSec !== null && swapInsPerSec >= t.busySwapIns && load1 !== null && load1 / cores >= t.loadPerCore) why.push(`${swapInsPerSec} pages a second swapped in under load ${load1} on ${cores} cores`);
+  return { pressure, swapInsPerSec, load1, cores, stressed: why.length > 0, why: why.join(', ') };
+}
+
+// One live reading for the duties: the pressure level, the swap-in rate over `windowMs`, and the load. A probe that fails leaves its number unknown.
+export async function readStress(probes, windowMs = 2000, wait = (ms) => new Promise((r) => setTimeout(r, ms))) {
+  const pressure = await probes.pressure().catch(() => null);
+  const first = await probes.swapIns().catch(() => null);
+  let swapInsPerSec = null;
+  if (first !== null) {
+    await wait(windowMs);
+    const second = await probes.swapIns().catch(() => null);
+    if (second !== null && second >= first) swapInsPerSec = Math.round((second - first) / (windowMs / 1000));
+  }
+  const [load1] = probes.loadavg();
+  return memoryStress({ pressure, swapInsPerSec, load1: Math.round(load1 * 10) / 10, cores: probes.cores() });
+}
+
 export const KEEP_MS = 24 * 3600000;
 export const WORKTREES = 3;
 export const FILE = 'responsiveness.jsonl';
