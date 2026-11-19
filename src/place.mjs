@@ -2,7 +2,7 @@
 // memory-bound, so a lane that does not need it goes to the cloud, and one that does goes to the laptop while the mini is
 // loaded. Inputs are counts and times only: the mini's memory pressure, swap-ins and load, the laptop's heartbeat age, and the cloud 403 windows
 // recorded with `shepherd place cloud-blocked`. `report` counts where the last days' lanes ran and whether the local ones needed to.
-import { execFile } from 'node:child_process';
+import { execFileGroup as execFile } from './group-exec.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

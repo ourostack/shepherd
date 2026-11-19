@@ -22,7 +22,7 @@
 // Nothing runs unless ~/.config/shepherd/wakes.json (or SHEPHERD_WAKES_CONFIG) says "enabled": true. Each runner's command
 // runs at most every everySeconds (300 by default), and the watch's 60-second pass checks which ones are due. Its state is
 // <state>/wake-runners.json. A command gets WAKE_TIMEOUT_MS to print its wakes.
-import { execFile } from 'node:child_process';
+import { execFileGroup as execFile } from './group-exec.mjs';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';

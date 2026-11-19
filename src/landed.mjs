@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
+import { execFileGroup as execFile } from './group-exec.mjs';
 
 const run = (file, argv, cwd) => new Promise((res) => {
   execFile(file, argv, { cwd, timeout: 120000, maxBuffer: 16 << 20 }, (err, stdout, stderr) => res({ code: err ? (typeof err.code === 'number' ? err.code : 1) : 0, stdout: String(stdout || ''), stderr: String(stderr || '') }));

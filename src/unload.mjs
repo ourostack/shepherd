@@ -4,7 +4,7 @@
 // sending the session a message makes the app load it again, so nothing is lost. A runtime that hosts any running, recent,
 // waiting, automated or unlanded session, or one coordinating a session that works, is left alone. Runs inside the retire
 // duty, so it does nothing until retire.json enables it.
-import { execFile } from 'node:child_process';
+import { execFileGroup as execFile } from './group-exec.mjs';
 import { landedGate } from './landed.mjs';
 
 // A runtime whose real footprint (not its resident size: the OS compresses and swaps the rest) is bloatMb or more is a heavy
