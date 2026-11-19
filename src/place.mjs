@@ -1,14 +1,14 @@
 // Where a lane should run: the cloud, the mini (this Mac), or the laptop, from what each can take right now. The mini is
 // memory-bound, so a lane that does not need it goes to the cloud, and one that does goes to the laptop while the mini is
-// loaded. Inputs are counts and times only: the mini's swap and load, the laptop's heartbeat age, and the cloud 403 windows
+// loaded. Inputs are counts and times only: the mini's memory pressure, swap-ins and load, the laptop's heartbeat age, and the cloud 403 windows
 // recorded with `shepherd place cloud-blocked`. `report` counts where the last days' lanes ran and whether the local ones needed to.
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { realProbes } from './responsiveness.mjs';
+import { memoryStress, readStress, realProbes } from './responsiveness.mjs';
 
-export const LIMITS = { swapPct: 90, loadPerCore: 1.5, staleIntervals: 2, defaultIntervalSec: 600, blockMinutes: 60, minDiskGb: 10 };
+export const LIMITS = { staleIntervals: 2, defaultIntervalSec: 600, blockMinutes: 60, minDiskGb: 10 };
 export const PLACES = ['cloud', 'mini', 'laptop'];
 const BLOCKS = 'cloud-blocks.json';
 const LOG = 'place-log.jsonl';
@@ -50,11 +50,11 @@ export function cloudState(d, repo, now = d.now()) {
   return hit ? { blocked: true, until: hit.until, minutesLeft: mins(hit.until - now) } : { blocked: false };
 }
 
-export function miniState({ swapPct = null, load1 = null, cores = 1 } = {}) {
-  const why = [];
-  if (swapPct !== null && swapPct >= LIMITS.swapPct) why.push(`swap ${swapPct}% full`);
-  if (load1 !== null && load1 / cores >= LIMITS.loadPerCore) why.push(`load ${load1} on ${cores} cores`);
-  return { swapPct, load1, cores, loaded: why.length > 0, why: why.join(', ') };
+// The mini is loaded when it is short of memory (pressure, or swap-ins, see memoryStress). Swap fullness and a high load
+// average alone are not signs of it: macOS keeps swap near full by design, and the mini answers fast at a load of 40 on 18 cores.
+export function miniState(reading = {}) {
+  const s = memoryStress(reading);
+  return { pressure: s.pressure, swapInsPerSec: s.swapInsPerSec, load1: s.load1, cores: s.cores, loaded: s.stressed, why: s.why };
 }
 
 // The laptop's heartbeat (when it wrote it, how often, whether its hub is connected, its free disk) as a verdict.
@@ -101,13 +101,12 @@ export function laptopStart(d) {
 
 export function liveProbes(d) {
   const base = realProbes(d);
-  return { loadavg: base.loadavg, cores: base.cores, swapPct: () => base.swapPct().catch(() => null), laptop: () => laptopBeat(d) };
+  return { loadavg: base.loadavg, cores: base.cores, stress: () => readStress(base), laptop: () => laptopBeat(d) };
 }
 
 export async function place(d, { repo = null, local = false, miniOnly = false } = {}, probes = liveProbes(d)) {
   const now = d.now();
-  const [load1] = probes.loadavg();
-  const mini = miniState({ swapPct: await probes.swapPct(), load1: Math.round(load1 * 10) / 10, cores: probes.cores() });
+  const mini = miniState(await probes.stress());
   const laptop = laptopState(await probes.laptop(), now);
   const cloud = cloudState(d, repo, now);
   const answer = decide({ local, miniOnly, mini, laptop, cloud });
@@ -167,7 +166,7 @@ export async function report(d, { days = 7 } = {}) {
 
 export function renderPlace(r) {
   const l = r.laptop.ready ? 'ready' : 'not ready';
-  return `${r.place}: ${r.why}\n  mini: ${r.mini.swapPct ?? '?'}% swap, load ${r.mini.load1 ?? '?'}/${r.mini.cores} cores; laptop: ${l}; cloud: ${r.cloud.blocked ? `blocked ${r.cloud.minutesLeft} more min` : 'open'}${r.start ? `\n  start: ${r.start.command}${r.start.hub ? ` (hub device ${r.start.hub})` : ''}` : ''}`;
+  return `${r.place}: ${r.why}\n  mini: memory pressure ${r.mini.pressure ?? '?'} (1 normal), ${r.mini.swapInsPerSec ?? '?'} swap-ins/s, load ${r.mini.load1 ?? '?'}/${r.mini.cores} cores; laptop: ${l}; cloud: ${r.cloud.blocked ? `blocked ${r.cloud.minutesLeft} more min` : 'open'}${r.start ? `\n  start: ${r.start.command}${r.start.hub ? ` (hub device ${r.start.hub})` : ''}` : ''}`;
 }
 
 export function renderReport(r) {

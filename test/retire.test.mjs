@@ -277,18 +277,19 @@ test('idle-landed: archives an idle session, coordinated or not, once it has bee
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-test('swap pressure: a session idle six hours whose only unlanded work is on main itself is archived; without pressure, or with work on a branch, it stays', async () => {
+const HOT = { stressed: true, why: 'memory pressure warning' };
+test('memory pressure: a session idle six hours whose only unlanded work is on main itself is archived; without pressure, or with work on a branch, it stays', async () => {
   const home = tmp('retire-pressure-');
   const app = fakeApp();
   const onMain = { checkLanded: async () => ({ outcome: 'hold', onDefault: true, why: 'it has uncommitted changes on main itself, which cannot be landed by a pull request' }) };
   const onBranch = { checkLanded: async () => ({ outcome: 'hold', why: '1 unpushed commit(s) on a-branch' }) };
   let n = 0;
-  const run = (deps, swapPct) => retireSessions([row(`${ORPHAN.slice(0, -2)}0${n}`, idle(PRESSURE_MAIN_MS + 1)), row(`${CHILD.slice(0, -2)}0${n++}`, idle(PRESSURE_MAIN_MS - 60_000))], { ...testDeps(home, { app }), ...deps }, { apply: true, idleLanded: true, swapPct });
-  assert.deepEqual((await run(onMain, 80)).map((x) => x.what), ['hold', 'hold'], 'no pressure');
-  assert.deepEqual((await run(onBranch, 98)).map((x) => x.what), ['hold', 'hold'], 'a branch with unpushed work stays');
-  const e = await run(onMain, 98);
-  assert.deepEqual(e.map((x) => [x.id, x.what, x.reason]), [[`${ORPHAN.slice(0, -2)}02`, 'archive', 'swap-pressure'], [`${CHILD.slice(0, -2)}02`, 'hold', 'unlanded']]);
-  assert.match(e[0].why, /swap 98% full; its folder keeps the changes it has on main/);
+  const run = (deps, stress) => retireSessions([row(`${ORPHAN.slice(0, -2)}0${n}`, idle(PRESSURE_MAIN_MS + 1)), row(`${CHILD.slice(0, -2)}0${n++}`, idle(PRESSURE_MAIN_MS - 60_000))], { ...testDeps(home, { app }), ...deps }, { apply: true, idleLanded: true, stress });
+  assert.deepEqual((await run(onMain, { stressed: false, why: '' })).map((x) => x.what), ['hold', 'hold'], 'no pressure');
+  assert.deepEqual((await run(onBranch, HOT)).map((x) => x.what), ['hold', 'hold'], 'a branch with unpushed work stays');
+  const e = await run(onMain, HOT);
+  assert.deepEqual(e.map((x) => [x.id, x.what, x.reason]), [[`${ORPHAN.slice(0, -2)}02`, 'archive', 'memory-pressure'], [`${CHILD.slice(0, -2)}02`, 'hold', 'unlanded']]);
+  assert.match(e[0].why, /memory pressure warning; its folder keeps the changes it has on main/);
   assert.equal(app.archived.length, 1);
   fs.rmSync(home, { recursive: true, force: true });
 });

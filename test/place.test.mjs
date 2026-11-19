@@ -11,8 +11,8 @@ import { historyFile } from '../src/index.mjs';
 const NOW = 1e12;
 const tmp = (n) => fs.mkdtempSync(path.join(os.tmpdir(), n));
 const fresh = () => ({ state: tmp('place-'), now: () => NOW });
-const calm = miniState({ swapPct: 40, load1: 4, cores: 18 });
-const busy = miniState({ swapPct: 97, load1: 60, cores: 18 });
+const calm = miniState({ pressure: 1, swapInsPerSec: 0, load1: 4, cores: 18 });
+const busy = miniState({ pressure: 4, swapInsPerSec: 5000, load1: 60, cores: 18 });
 const beat = (over = {}) => ({ at: new Date(NOW - 5 * 60000).toISOString(), interval_sec: 600, hub: { connected: true }, disk: { free_gb: 100 }, ...over });
 const up = laptopState(beat(), NOW);
 const down = laptopState(null, NOW);
@@ -50,11 +50,13 @@ test('while cloud is blocked by a 403, a lane that could go there goes where the
   assert.equal(decide({ mini: busy, laptop: down, cloud: blocked }).place, 'mini');
 });
 
-test('the mini is loaded by swap or by load per core, and unreadable numbers never load it', () => {
-  assert.equal(miniState({ swapPct: LIMITS.swapPct, load1: 1, cores: 18 }).loaded, true);
-  assert.equal(miniState({ swapPct: 10, load1: 18 * LIMITS.loadPerCore, cores: 18 }).loaded, true);
-  assert.equal(miniState({ swapPct: 89, load1: 5, cores: 18 }).loaded, false);
-  assert.equal(miniState({ swapPct: null, load1: null, cores: 18 }).loaded, false);
+test('the mini is loaded by memory pressure or swap-ins, not by swap fullness or load alone, and unreadable numbers never load it', () => {
+  assert.equal(miniState({ pressure: 2, swapInsPerSec: 0, load1: 1, cores: 18 }).loaded, true);
+  assert.equal(miniState({ pressure: 1, swapInsPerSec: 1000, load1: 1, cores: 18 }).loaded, true);
+  assert.equal(miniState({ pressure: 1, swapInsPerSec: 300, load1: 40, cores: 18 }).loaded, true, 'steady swap-ins under load');
+  assert.equal(miniState({ pressure: 1, swapInsPerSec: 300, load1: 4, cores: 18 }).loaded, false, 'steady swap-ins with no load');
+  assert.equal(miniState({ pressure: 1, swapInsPerSec: 0, load1: 94.8, cores: 18, swapPct: 97 }).loaded, false, 'a high load with swap nearly full is a healthy Mac');
+  assert.equal(miniState({ pressure: null, swapInsPerSec: null, load1: null, cores: 18 }).loaded, false);
 });
 
 test('the laptop is ready only with a fresh heartbeat, a connected hub and disk to spare', () => {
@@ -82,12 +84,12 @@ test('cloud 403 windows are per repository or global, expire, and clear', () => 
 
 test('place reads the probes, answers, and keeps a one-line record', async () => {
   const d = fresh();
-  const probes = { loadavg: () => [60, 50, 40], cores: () => 18, swapPct: async () => 97, laptop: async () => beat() };
+  const probes = { stress: async () => ({ pressure: 4, swapInsPerSec: 5000, load1: 60, cores: 18 }), laptop: async () => beat() };
   const r = await place(d, { repo: 'o/a', local: true }, probes);
   assert.equal(r.place, 'laptop');
   assert.equal(r.start.route, 'hub');
   assert.match(r.start.command, /session laptop open/);
-  assert.deepEqual(r.mini, { swapPct: 97, load1: 60, cores: 18, loaded: true, why: 'swap 97% full, load 60 on 18 cores' });
+  assert.deepEqual(r.mini, { pressure: 4, swapInsPerSec: 5000, load1: 60, cores: 18, loaded: true, why: 'memory pressure critical, 5000 pages a second swapped in' });
   const log = fs.readFileSync(path.join(d.state, 'place-log.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
   assert.deepEqual(log.map((l) => [l.place, l.repo]), [['laptop', 'o/a']]);
   const cloud = await place(d, {}, probes);
