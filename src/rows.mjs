@@ -123,7 +123,7 @@ async function sidebarItems(d) {
   const workspaces = got.find((f) => f.type === 'workspace_list');
   const chats = got.find((f) => f.type === 'general_chat_sessions_list');
   if (!workspaces || !chats) {
-    throw new ShepherdError({ code: 'sidebar-unlisted', problem: str(got.find((f) => f.type === 'socket_error')?.message) ?? 'the GitHub Copilot app did not list its sessions in time', fix: 'open the GitHub Copilot app, let it finish starting, and try again' });
+    throw new ShepherdError({ code: 'sidebar-unlisted', problem: str(got.find((f) => f.type === 'socket_error')?.message) ?? 'the GitHub Copilot app did not list its sessions in time', fix: 'open the GitHub Copilot app, let it finish starting, and try again; if it is open and still does not list them, it is not answering (frozen, or starved of memory) and needs a restart: housesitter restart-copilot --resume' });
   }
   return { workspaces: arr(workspaces.workspaces), chats: arr(chats.sessions) };
 }

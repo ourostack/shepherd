@@ -74,6 +74,7 @@ test('toolArgs reads flags into the tool argument names, and kickoff flags into 
 test('toolArgs reads one JSON object from --input, and a flag wins over the input', () => {
   const input = JSON.stringify({ session_id: IDLE, message: 'from input', delivery_mode: 'immediate' });
   assert.deepEqual(toolArgs('send', { input, delivery: 'enqueue' }), { session_id: IDLE, message: 'from input', delivery_mode: 'enqueue' });
+  assert.deepEqual(toolArgs('send', { input: JSON.stringify({ session_id: IDLE, message: 'm', delivery: 'enqueue', 'as-user': true }) }), { session_id: IDLE, message: 'm', delivery_mode: 'enqueue', as_user: true }, 'a flag\'s own name is taken for its key');
   const c = toolArgs('create', { input: JSON.stringify({ project_id: 'Shepherd', kickoff: { prompt: 'go', permission_mode: 'manual' } }) });
   assert.deepEqual(c, { project_id: 'Shepherd', kickoff: { prompt: 'go', permission_mode: 'manual' } });
 });
@@ -81,7 +82,8 @@ test('toolArgs reads one JSON object from --input, and a flag wins over the inpu
 test('toolArgs refuses what it cannot read, with the verb\'s help as the fix', () => {
   const bad = (verb, input, problem) => assert.throws(() => toolArgs(verb, input), (e) => e.exit === 2 && e.shape.problem === problem && e.shape.fix === `shepherd ${verb} --help`);
   bad('send', { id: IDLE, delivery: 'sometimes' }, '--delivery takes immediate|enqueue');
-  bad('send', { input: JSON.stringify({ bogus: 1 }) }, 'unknown input key "bogus" for send');
+  bad('send', { input: JSON.stringify({ bogus: 1 }) }, 'unknown input key "bogus" for send; it takes session_id, message, delivery_mode, as_user');
+  bad('send', { input: JSON.stringify({ delivery: 'enqueue', delivery_mode: 'immediate' }) }, '"delivery" and "delivery_mode" are the same input; give one');
   bad('send', { input: '[1]' }, '--input needs one JSON object on stdin');
 });
 

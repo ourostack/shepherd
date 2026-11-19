@@ -104,8 +104,12 @@ export function toolArgs(verb, input) {
     try { parsed = JSON.parse(input.input); } catch { throw bad('--input needs one JSON object on stdin'); }
     if (!isRecord(parsed)) throw bad('--input needs one JSON object on stdin');
     const allowed = new Set(['kickoff', spec.positional, ...(spec.options ?? []).map(([, k]) => k), ...(spec.switches ?? []).map(([, k]) => k)].filter(Boolean));
-    for (const [key, value] of Object.entries(parsed)) {
-      if (!allowed.has(key)) throw bad(`unknown input key "${key}" for ${verb}`);
+    // A flag's own name is taken for its key (`delivery` for delivery_mode), since that is the name an agent learned from --help.
+    const alias = new Map([...(spec.options ?? []), ...(spec.switches ?? [])].flatMap(([flag, k]) => (k.includes('.') ? [] : [[flag, k], [flag.replace(/-/g, '_'), k]])));
+    for (const [given, value] of Object.entries(parsed)) {
+      const key = allowed.has(given) ? given : alias.get(given) ?? given;
+      if (key !== given && Object.hasOwn(parsed, key)) throw bad(`"${given}" and "${key}" are the same input; give one`);
+      if (!allowed.has(key)) throw bad(`unknown input key "${given}" for ${verb}; it takes ${[...allowed].filter((k) => k !== 'kickoff' || verb === 'create').join(', ')}`);
       if (key !== 'kickoff') {
         const c = coerce(key, value);
         if (!c.ok) throw bad(`${key} takes ${c.takes}`);
