@@ -358,3 +358,29 @@ test('a slow runner does not hold up the others, is not started twice, and every
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+const until = async (fn, ms = 5000) => { for (const end = Date.now() + ms; Date.now() < end && !fn();) await new Promise((r) => setTimeout(r, 50)); };
+
+test('a runner that times out takes its whole process tree with it', async () => {
+  const runner = `const { spawn } = require('node:child_process');
+const g = spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)'], { stdio: 'inherit' });
+console.log(g.pid); setInterval(() => {}, 1000);`;
+  const r = await runCommand([process.execPath, '-e', runner], 600);
+  assert.equal(r.ok, false);
+  const pid = Number(r.stdout.trim());
+  assert.ok(pid > 0);
+  await until(() => !alive(pid));
+  assert.equal(alive(pid), false, 'the grandchild, which ignores SIGTERM, is gone');
+});
+
+test('a runner that exits normally leaves no grandchild behind', async () => {
+  const runner = `const { spawn } = require('node:child_process');
+const g = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'inherit' });
+g.unref(); console.log(g.pid);`;
+  const r = await runCommand([process.execPath, '-e', runner], 10_000);
+  assert.equal(r.ok, true);
+  const pid = Number(r.stdout.trim());
+  await until(() => !alive(pid));
+  assert.equal(alive(pid), false);
+});

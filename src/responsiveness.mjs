@@ -5,7 +5,7 @@
 // target: the app under 2 s, git under 1 s, memory pressure below critical, swap-ins under 1,000 pages a second.
 // How full swap is stays in each reading for the record but is not a bar: macOS adds swap files as it needs them, so the
 // percentage sits near full by design, and on this Mac it did not move with git or app slowness (correlation 0.05).
-import { execFile } from 'node:child_process';
+import { execFileGroup as execFile } from './group-exec.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

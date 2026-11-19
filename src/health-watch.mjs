@@ -12,7 +12,7 @@
 // The roster is the newest resume record (resume-last.json, written by resume()) that this watch has not followed yet;
 // it starts a new six hours.
 
-import { execFile } from 'node:child_process';
+import { execFileGroup as execFile } from './group-exec.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

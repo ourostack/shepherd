@@ -1,7 +1,7 @@
 // `shepherd install`: the launch agent that keeps `shepherd watch --every 60 --quiet` running, so the health watch and the
 // quota balancer run with no one at a terminal. KeepAlive restarts it if it exits. Loading replaces a running copy of the
 // same label. Nothing here runs unless the person asks for it.
-import { execFile } from 'node:child_process';
+import { execFileGroup as execFile } from './group-exec.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

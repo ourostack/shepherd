@@ -1,5 +1,5 @@
 // The app's sessions as work: each local, unarchived session, and whether its agent loop is busy.
-import { execFile } from 'node:child_process';
+import { execFileGroup as execFile } from './group-exec.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
