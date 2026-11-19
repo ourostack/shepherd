@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { archiveRow, statePath } from '../src/store.mjs';
 import { COORDINATOR_RECENT_MS, FINISHED_IDLE_MS, PRESSURE_MAIN_MS, HANDOFF_QUIET_MS, IDLE_LANDED_MS, IDLE_LANDED_PER_PASS, census, childrenNote, drainTargets, retireConfig, retireSessions, watchRetire } from '../src/retire.mjs';
 import { fakeApp, iso, NOW, row, sessionHistory, testDeps, working } from './fake-sidebar.mjs';
 
@@ -428,4 +429,14 @@ test('a session a drain sends its wakes to, configured or recorded as successor,
   fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify({ 'o/r': { successor: { from: P, to: ORPHAN } } }));
   assert.deepEqual([...drainTargets(dir)].sort(), [P, ORPHAN].sort());
   assert.deepEqual([...drainTargets(path.join(dir, 'missing'))], []);
+});
+
+test('the shared archive door refuses a drain target, so a duty that skips retire cannot archive it', async () => {
+  const home = tmp('retire-');
+  const dir = tmp('drains-');
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ drains: [{ repo: 'o/r', session: P }] }));
+  const d = testDeps(home, { app: fakeApp() });
+  d.drainTargets = () => drainTargets(dir);
+  assert.equal(await archiveRow(d, row(P, quiet), 'oversize-idle', 'big'), false);
+  assert.equal(fs.existsSync(statePath(d, 'retireLog')), false);
 });
