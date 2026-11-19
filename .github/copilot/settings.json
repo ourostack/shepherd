@@ -1,0 +1,14 @@
+{
+  "extraKnownMarketplaces": {
+    "ourostack": {
+      "source": {
+        "source": "github",
+        "repo": "ourostack/desk"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "desk@ourostack": true,
+    "superpowers@ourostack": true
+  }
+}
