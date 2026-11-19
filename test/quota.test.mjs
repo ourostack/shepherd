@@ -555,3 +555,21 @@ test('an applied tick moves a project off a spent account, messages the session 
   assert.deepEqual(lines.map((l) => [l.act, l.act === 'resume' ? l.session : l.to]), [['move', 'other@github.com'], ['resume', S]]);
   assert.equal(Q.status().applied, true);
 });
+
+test('burn is known for a stale account and an unlimited one, and projects the date it runs dry against the reset', () => {
+  const reset = '2026-12-01T00:00:00Z';
+  const now = Date.parse('2026-11-19T12:00:00Z');
+  const stale = { unlimited: false, remaining: 333708, spent: 666292, reset, at: '2026-11-18T22:59:00Z' };
+  const lone = Q.forecast({}, { k: stale, u: { unlimited: true, spent: 0, reset } }, { now });
+  assert.equal(lone.u.hours_left, Infinity, 'unlimited never runs dry');
+  assert.equal(Q.forecast({}, { s: { remaining: 0, spent: 1000000, reset, at: '2026-11-19T11:00:00Z' } }, { now }).s.hours_left, 0, 'spent is dry now');
+  assert.equal(lone.k.basis, 'month-to-date', 'one reading: the month to date');
+  assert.ok(lone.k.per_h > 1000 && lone.k.per_h < 2000);
+  assert.ok(Number.isFinite(lone.k.hours_left) && lone.k.hours_left < Date.parse(reset) / 3600000 - now / 3600000, 'dry before the reset');
+  const days = [{ at: '2026-11-10T00:00:00Z', spent: 500000 }, { at: '2026-11-18T22:59:00Z', spent: 666292 }];
+  const f = Q.forecast({ k: days }, { k: stale }, { now });
+  assert.equal(f.k.basis, 'history', 'older readings, none in the window: the span they cover');
+  assert.equal(f.k.per_h, Math.round(166292 / (214.98)));
+  const hist = [{ at: '2026-10-01T00:00:00Z', spent: 1 }, { at: '2026-11-01T00:00:00Z', spent: 2 }, { at: '2026-11-01T01:00:00Z', spent: 3 }, { at: '2026-11-19T11:50:00Z', spent: 4 }, { at: '2026-11-19T11:55:00Z', spent: 5 }];
+  assert.deepEqual(Q.pruneHistory(hist, { now }).map((x) => x.spent), [2, 4, 5], 'the period, thinned to 6 hours outside the window');
+});
