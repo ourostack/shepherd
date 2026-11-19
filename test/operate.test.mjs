@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { deps } from '../src/index.mjs';
+import { approveStalePlans } from '../src/plan-backstop.mjs';
 import { answer, archiveSession, automation, automationOf, create, findSession, messages, plan, RELAYED_LABEL, runWorkflow, send, session, sessions, show, workflows } from '../src/operate.mjs';
 import { writePending } from '../src/store.mjs';
 import { startFakeApp } from './fake-app.mjs';
@@ -247,6 +248,26 @@ test('plan approves or rejects a plan the tracker heard, then sends its feedback
     assert.equal(responded.approved, false);
     assert.equal(responded.selected_action, 'go');
     assert.equal(app.received.find((m) => m.type === 'send_message' && m.prompt.endsWith('Smaller please')).session_id, PLANNING);
+  });
+});
+
+test('plan backstop approves for autopilot a plan an agent-started session has waited on for 2 minutes, and leaves others', async () => {
+  const stale = new Date(Date.now() - 3 * 60000).toISOString();
+  await withCopilot({ workspaces: [lane('w-plan', PLANNING, { creatorSessionId: WORKING })] }, async ({ d, app, home }) => {
+    histories(d, home);
+    writePending(d, { [PLANNING]: { kind: 'plan', requestId: 'pl1', at: new Date().toISOString() } });
+    assert.deepEqual(await approveStalePlans(d), [], 'a fresh plan is left for its coordinator');
+    writePending(d, { [PLANNING]: { kind: 'plan', requestId: 'pl1', at: stale } });
+    assert.deepEqual(await approveStalePlans(d), [PLANNING]);
+    const responded = app.received.find((m) => m.type === 'respond_to_exit_plan_mode');
+    assert.equal(responded.approved, true);
+    assert.equal(responded.selected_action, 'autopilot');
+  });
+  await withCopilot({ workspaces: [lane('w-plan', PLANNING)] }, async ({ d, app, home }) => {
+    histories(d, home);
+    writePending(d, { [PLANNING]: { kind: 'plan', requestId: 'pl1', at: stale } });
+    assert.deepEqual(await approveStalePlans(d), [], 'a session the owner opened is left for the owner');
+    assert.equal(app.received.find((m) => m.type === 'respond_to_exit_plan_mode'), undefined);
   });
 });
 

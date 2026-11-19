@@ -13,6 +13,7 @@ import { resumeStuck, stuckResumeConfig } from './stuck-resume.mjs';
 import { trustAll, trustConfig } from './trust.mjs';
 import { inboxConfig, pollInboxes } from './inbox.mjs';
 import { listenPrompts } from './prompts.mjs';
+import { approveStalePlans } from './plan-backstop.mjs';
 import { sample as sampleResponsiveness } from './responsiveness.mjs';
 
 // Runs the duties every everyMs until stop() is true. The clock and the sleep are injected, so a test can run it on a fake one.
@@ -50,6 +51,13 @@ export function watchDuties({ copilotHome, quiet = false, say = () => {}, log = 
     // Holds one observer connection open, so the questions and plans the app announces are heard for answer and plan.
     { name: 'responsiveness', run: () => sampleResponsiveness(deps({ copilotHome })) },
     { name: 'prompt tracker', run: () => { prompts ??= listenPrompts(deps({ copilotHome })); } },
+    {
+      name: 'plan backstop',
+      run: async () => {
+        const approved = await approveStalePlans(deps({ copilotHome }));
+        if (!quiet && approved.length) say(`plan backstop: ${approved.length} plan(s) nobody answered approved for autopilot`);
+      },
+    },
     {
       name: 'quota balancer',
       run: async () => {
