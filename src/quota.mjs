@@ -605,7 +605,7 @@ export function plan(st, readings, live, cfg, { now = Date.now(), refused = {}, 
   if (def && defH !== 'ok' && unprojected) notes.push(`${unprojected} live chat session(s) bill the default account ${keyOf(def)} (${defH}); the app has no per-chat Copilot account, so they are not moved`);
   for (const a of accounts) {
     const b = burn[a.key];
-    if (b) Object.assign(a, { burn_per_h: b.per_h, hours_left: b.hours_left, agents_per_h: b.agents_per_h ?? null, agents: b.agents || [], dry_at: b.hours_left === Infinity || b.hours_left == null ? null : new Date(now + b.hours_left * 3600000).toISOString() });
+    if (b) Object.assign(a, { burn_per_h: b.per_h, burn_basis: b.basis || null, hours_left: b.hours_left === Infinity ? null : b.hours_left, never_dry: b.hours_left === Infinity, dry_before_reset: Number.isFinite(b.hours_left) && (!b.reset || now + b.hours_left * 3600000 < Date.parse(b.reset)), agents_per_h: b.agents_per_h ?? null, agents: b.agents || [], dry_at: !Number.isFinite(b.hours_left) ? null : new Date(now + b.hours_left * 3600000).toISOString() });
     a.overage = readings[a.key]?.overage_permitted ?? null;
   }
   const runway = groupRunway(st, readings, burn, cfg, { now, hp, accounts: st.accounts });
@@ -617,12 +617,12 @@ export function plan(st, readings, live, cfg, { now = Date.now(), refused = {}, 
 }
 
 // Pure. history: [{at, spent}] oldest first -> requests an hour over the window, from the last counter reset on.
-export function burnRate(history, { now = Date.now(), windowH = 6 } = {}) {
+export function burnRate(history, { now = Date.now(), windowH = 6, minSpanH = 1 / 3 } = {}) {
   let h = (history || []).filter((x) => x && x.spent != null && now - Date.parse(x.at) <= windowH * 3600000);
   for (let i = h.length - 1; i > 0; i--) if (h[i].spent < h[i - 1].spent) { h = h.slice(i); break; }
   if (h.length < 2) return null;
   const spanH = (Date.parse(h.at(-1).at) - Date.parse(h[0].at)) / 3600000;
-  if (spanH < 1 / 3) return null;
+  if (spanH < minSpanH) return null;
   return Math.max(0, (h.at(-1).spent - h[0].spent) / spanH);
 }
 
@@ -630,14 +630,45 @@ export function burnRate(history, { now = Date.now(), windowH = 6 } = {}) {
 // agents: agentBurn() of the agents' own files. An account's counter already includes its agents' requests, so their
 // burn is a floor, never added on top: it counts when this machine has no burn of its own for the account (no history yet,
 // or only the app's broadcasts, which go quiet while only an agent bills it) or sees less than the agents report.
-export function forecast(history, readings, { now = Date.now(), windowH = 6, agents = {} } = {}) {
+export function forecast(history, readings, { now = Date.now(), windowH = 6, agents = {}, periodH = 35 * 24 } = {}) {
   const out = {};
   for (const [k, r] of Object.entries(readings)) {
-    const own = burnRate(history[k], { now, windowH });
+    // The recent window first; when the account has no fresh readings (a stale one), the longest span its kept readings
+    // cover; with a single reading, the month to date: requests spent over the hours since the period began.
+    if (r.unlimited) { out[k] = { per_h: 0, basis: 'unlimited', hours_left: Infinity, reset: r.reset || null }; continue; }
+    let basis = 'window';
+    let own = burnRate(history[k], { now, windowH });
+    if (own == null) { own = burnRate(history[k], { now, windowH: periodH, minSpanH: 12 }); basis = 'history'; }
+    if (own == null) { own = monthToDate(r, now); basis = 'month-to-date'; }
     const ag = agents[k];
     if (own == null && !ag) continue;
     const per = Math.max(own ?? 0, ag?.per_h ?? 0);
-    out[k] = { per_h: Math.round(per), hours_left: r.unlimited ? Infinity : r.remaining == null ? null : per > 0 ? Math.max(0, r.remaining) / per : Infinity, reset: r.reset || null, ...(ag ? { agents_per_h: Math.round(ag.per_h), agents: ag.agents } : {}) };
+    const sinceH = r.at ? Math.max(0, (now - Date.parse(r.at)) / 3600000) : 0;
+    out[k] = { per_h: Math.round(per), basis: own == null ? 'agents' : basis, hours_left: r.unlimited ? Infinity : r.remaining == null ? null : r.remaining <= 0 ? 0 : per > 0 ? Math.max(0, Math.max(0, r.remaining) / per - sinceH) : Infinity, reset: r.reset || null, ...(ag ? { agents_per_h: Math.round(ag.per_h), agents: ag.agents } : {}) };
+  }
+  return out;
+}
+
+// Pure. Requests an hour averaged over the current period, from one reading: spent over the hours since the period began
+// (one month before its reset). null when the reading has no counter or no reset, or the period just began.
+export function monthToDate(r, now = Date.now()) {
+  if (!r || r.unlimited || r.spent == null || !r.reset) return null;
+  const end = new Date(r.reset);
+  if (Number.isNaN(end.getTime())) return null;
+  const start = new Date(end); start.setUTCMonth(start.getUTCMonth() - 1);
+  const asOf = r.at ? Date.parse(r.at) : now;
+  const h = (asOf - start.getTime()) / 3600000;
+  return h < 1 ? null : Math.max(0, r.spent) / h;
+}
+
+// Pure. Burn history kept across the period: every sample for the window, then one per 6 hours back to periodH, oldest first.
+export function pruneHistory(h, { now = Date.now(), windowH = 6, periodH = 35 * 24 } = {}) {
+  const out = [];
+  for (const x of h) {
+    const age = (now - Date.parse(x.at)) / 3600000;
+    if (age > periodH) continue;
+    if (age > windowH && out.length && Date.parse(x.at) - Date.parse(out.at(-1).at) < 6 * 3600000 && (now - Date.parse(out.at(-1).at)) / 3600000 > windowH) continue;
+    out.push(x);
   }
   return out;
 }
@@ -672,7 +703,7 @@ export function groupRunway(st, readings, burn, cfg, { now = Date.now(), hp, acc
     if (!overage.length && hours != null && hours < cfg.warn_h && beforeReset) {
       alert = `Copilot premium requests for ${label} run out in about ${fmtH(hours)} at the current burn (${Math.round(per)} an hour; ${Math.round(left)} left on ${usable.join(', ') || 'no account'}), before the ${reset ? reset.slice(0, 10) : 'next'} reset, and none of ${g.accounts.join(', ')} allows enterprise overage. Options: ask an enterprise admin to allow overage or raise the budget on one of them, or add another work-licensed seat to the Copilot app.`;
     }
-    out.push({ accounts: g.accounts, projects: g.projects.length, included_left: left === Infinity ? null : Math.round(left), burn_per_h: Math.round(per), hours_left: hours, reset, before_reset: beforeReset, overage_fallback: overage, alert });
+    out.push({ accounts: g.accounts, projects: g.projects.length, included_left: left === Infinity ? null : Math.round(left), burn_per_h: Math.round(per), hours_left: Number.isFinite(hours) ? hours : null, never_dry: hours === Infinity, dry_at: Number.isFinite(hours) ? new Date(now + hours * 3600000).toISOString() : null, reset, before_reset: beforeReset, overage_fallback: overage, alert });
   }
   return out;
 }
@@ -810,13 +841,14 @@ export async function tick(d, { apply = false, only = null, cfg = config(), now 
   const { readings, own, agents, errors } = await read(d, st, cfg, state.readings, fetchDirect);
   const live = liveOf(d, st, now);
   const history = (id) => d.history(id).lines;
-  // Burn history: one sample per account per 5 minutes, from this Mac's own readings, kept for burn_window_h.
+  // Burn history: a sample whenever an account's reading is newer than the last one kept, 5 minutes apart at least, from any
+  // source (a cached or fleet reading keeps its own time, so a stale account still adds what it last said). Kept for the period.
   state.history ||= {};
   for (const [k, r] of Object.entries(readings)) {
-    if (r.spent == null || String(r.source).startsWith('cached:')) continue;
+    if (r.spent == null || r.unlimited || !r.at) continue;
     const h = (state.history[k] ||= []);
     if (!h.length || Date.parse(r.at) - Date.parse(h.at(-1).at) >= 5 * 60000) h.push({ at: r.at, spent: r.spent });
-    state.history[k] = h.filter((x) => now - Date.parse(x.at) <= cfg.burn_window_h * 3600000);
+    state.history[k] = pruneHistory(h, { now, windowH: cfg.burn_window_h });
   }
   const burn = forecast(state.history, readings, { now, windowH: cfg.burn_window_h, agents: agentBurn(agents, { now, windowH: cfg.burn_window_h }) });
   // A refusal (a 402) is remembered until a reading shows requests again or the reset passes.
@@ -920,8 +952,8 @@ export async function tick(d, { apply = false, only = null, cfg = config(), now 
 export function renderQuota(out) {
   const lines = [`Copilot accounts on ${out.machine} (${out.at}):`];
   if (out.enabled === false) lines.push(`  (the balancer is off: set "enabled": true in ${paths().config} to let it move projects)`);
-  for (const a of out.accounts) lines.push(`  ${a.key.padEnd(34)} ${String(a.health).padEnd(8)} ${a.pct == null ? '   ?' : `${String(a.pct).padStart(5)}%`} left  ${a.burn_per_h == null ? 'burn ?                        ' : `${String(a.burn_per_h).padStart(6)}/h ${fmtH(a.hours_left).padStart(7)}${a.dry_at ? ` dry ${a.dry_at.slice(5, 16).replace('T', ' ')}Z` : '              '}`}  ${String(a.projects).padStart(2)} project(s), ${a.live_sessions} live  [${a.source || 'no reading'}${a.at ? ` ${a.at.slice(11, 16)}Z` : ''}]${a.overage ? ' overage ok' : ''}${a.agents?.length ? ` agents ${a.agents_per_h}/h (${a.agents.join(', ')})` : ''}${a.blocked_at ? ` quota error ${a.blocked_at}` : ''}`);
-  for (const g of out.runway || []) lines.push(`  runway ${g.projects} project(s) on {${g.accounts.join(', ')}}: ${g.unlimited?.length ? `unlimited on ${g.unlimited.join(', ')}; ` : ''}tranche ${g.cap}% used; ${g.hours_left == null ? 'burn not known yet' : `${fmtH(g.hours_left)} of included requests at ${g.burn_per_h}/h`}${g.overage_fallback.length ? `, then enterprise overage on ${g.overage_fallback.join(', ')}` : ', NO overage fallback'}${g.reset ? ` (reset ${g.reset.slice(0, 10)})` : ''}`);
+  for (const a of out.accounts) lines.push(`  ${a.key.padEnd(34)} ${String(a.health).padEnd(8)} ${a.pct == null ? '   ?' : `${String(a.pct).padStart(5)}%`} left  ${a.burn_per_h == null ? 'burn ?                        ' : `${String(a.burn_per_h).padStart(6)}/h ${fmtH(a.never_dry ? Infinity : a.hours_left).padStart(7)}${a.dry_at ? ` dry ${a.dry_at.slice(5, 16).replace('T', ' ')}Z${a.dry_before_reset ? ' BEFORE RESET' : ''}` : '              '}${a.burn_basis && a.burn_basis !== 'window' && a.burn_basis !== 'unlimited' ? ` (${a.burn_basis})` : ''}`}  ${String(a.projects).padStart(2)} project(s), ${a.live_sessions} live  [${a.source || 'no reading'}${a.at ? ` ${a.at.slice(11, 16)}Z` : ''}]${a.overage ? ' overage ok' : ''}${a.agents?.length ? ` agents ${a.agents_per_h}/h (${a.agents.join(', ')})` : ''}${a.blocked_at ? ` quota error ${a.blocked_at}` : ''}`);
+  for (const g of out.runway || []) lines.push(`  runway ${g.projects} project(s) on {${g.accounts.join(', ')}}: ${g.unlimited?.length ? `unlimited on ${g.unlimited.join(', ')}; ` : ''}tranche ${g.cap}% used; ${g.never_dry ? 'never runs dry' : g.hours_left == null ? 'burn not known yet' : `${fmtH(g.hours_left)} of included requests at ${g.burn_per_h}/h`}${g.overage_fallback.length ? `, then enterprise overage on ${g.overage_fallback.join(', ')}` : ', NO overage fallback'}${g.reset ? ` (reset ${g.reset.slice(0, 10)})` : ''}`);
   for (const w of out.waiting || []) lines.push(`  WAITING ON THE OPERATOR: ${w.sentence}`);
   for (const m of out.moves) lines.push(`  move ${m.project}: ${m.from} -> ${m.to || '(none)'} (${m.why}${m.why === 'tranche' ? ` ${m.cap}%` : ''}${m.from_hours_left != null ? `, ${fmtH(m.from_hours_left)} left at this burn` : ''}${m.busy ? '; working sessions are messaged to continue' : ''})${m.resume?.length ? `, resume ${m.resume.length}` : ''}${m.stuck ? ` STUCK: ${m.stuck}` : ''}`);
   for (const x of out.pins || []) lines.push(`  keep ${x.project} on ${x.account}: a person pinned it${x.health === 'out' ? ' (spent, so it moves)' : ''}`);
