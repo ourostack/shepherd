@@ -37,7 +37,7 @@ export const AGENT_VERBS = {
   },
   create: {
     summary: 'Make a session on a project (or a chat), optionally with a kickoff prompt.',
-    options: [['project', 'project_id', 'The project, by id or name.'], ['session-kind', 'session_kind', 'chat, for a session with no project.'], NAME, ['workspace-type', 'workspace_type', 'worktree or branch.'], ['branch', 'branch_name', 'The branch to work on.'], ['prompt', 'kickoff.prompt', 'The first prompt.'], ['mode', 'kickoff.mode', 'How the session runs its first prompt.'], ['model', 'kickoff.model', 'The model.'], ['agent', 'kickoff.agent', 'The agent.'], ['reasoning-effort', 'kickoff.reasoning_effort', 'The reasoning effort.'], ['permission-mode', 'kickoff.permission_mode', 'allow-all or manual.']],
+    options: [['project', 'project_id', 'The project, by id or name.'], ['session-kind', 'session_kind', 'chat, for a session with no project.'], NAME, ['workspace-type', 'workspace_type', 'worktree or branch.'], ['branch', 'branch_name', 'The branch to work on.'], ['prompt', 'kickoff.prompt', 'The first prompt.'], ['mode', 'kickoff.mode', 'How the session runs its first prompt (default autopilot when there is a prompt).'], ['model', 'kickoff.model', 'The model.'], ['agent', 'kickoff.agent', 'The agent.'], ['reasoning-effort', 'kickoff.reasoning_effort', 'The reasoning effort.'], ['permission-mode', 'kickoff.permission_mode', 'allow-all or manual.']],
     switches: [AS_USER],
   },
   answer: { summary: 'Answer a question this watch heard the session ask.', positional: 'session_id', options: [['answer', 'answer', 'The answer.']] },

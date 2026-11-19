@@ -289,7 +289,8 @@ export async function create(d, args) {
   addProbe(d, id, name, d.now());
   // The app runs no kickoff for a client that is not its window, so the name, mode and first message are set here.
   if (chat && name) await ask(d, { type: 'rename_session', session_id: id, title: name }, (reply) => (reply.type === 'session_title_updated' && reply.session_id === id ? 'ok' : 'ignore'), REQUEST_WAIT_MS);
-  const mode = str(kickoff.mode);
+  // A session that is sent a first message and no mode would otherwise wait in whatever mode the app opened it in; lanes run unattended.
+  const mode = str(kickoff.mode) ?? (prompt ? 'autopilot' : null);
   if (mode && mode !== 'interactive') await ask(d, { type: 'set_session_mode', session_id: id, mode }, (reply) => (reply.type === 'session_mode_result' && reply.session_id === id ? 'ok' : 'ignore'), REQUEST_WAIT_MS);
   const sent = prompt ? await tell(d, id, prompt, 'immediate', args.as_user === true) : null;
   const error = sent && !sent.ok ? `created, but the first message was not accepted: ${sent.error}` : null;
