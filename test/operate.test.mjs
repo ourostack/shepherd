@@ -186,6 +186,17 @@ test('create makes a chat, names it, sets its mode and sends the first message, 
   });
 });
 
+test('create with a first message and no mode runs the session in autopilot; an explicit interactive mode is kept', async () => {
+  await withCopilot({ workspaces: sidebar() }, async ({ d, app }) => {
+    await create(d, { name: 'Notes', session_kind: 'chat', as_user: true, kickoff: { prompt: 'Start here' } });
+    assert.equal(app.received.find((m) => m.type === 'set_session_mode').mode, 'autopilot');
+  });
+  await withCopilot({ workspaces: sidebar() }, async ({ d, app }) => {
+    await create(d, { name: 'Notes', session_kind: 'chat', as_user: true, kickoff: { prompt: 'Start here', mode: 'interactive' } });
+    assert.equal(app.received.find((m) => m.type === 'set_session_mode'), undefined);
+  });
+});
+
 test('create makes a project session in a worktree, finding the project by name, and opens its session', async () => {
   const projects = [{ id: 'proj-1', name: 'Shepherd' }];
   await withCopilot({ workspaces: sidebar(), projects }, async ({ d, app }) => {
