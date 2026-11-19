@@ -28,7 +28,7 @@ test('a local lane goes to the mini while it has room, and to the laptop once it
   assert.equal(decide({ local: true, mini: calm, laptop: up, cloud: open }).place, 'mini');
   const r = decide({ local: true, mini: busy, laptop: up, cloud: open });
   assert.equal(r.place, 'laptop');
-  assert.match(r.why, /swap 97% full/);
+  assert.match(r.why, /memory pressure critical/);
 });
 
 test('a loaded mini with no fresh laptop is still the only home, and the reason says so', () => {
