@@ -185,7 +185,7 @@ The laptop is known by its heartbeat, a gist file read through the gh CLI. Write
 
 ## Responsiveness
 
-Every pass of `shepherd watch --every` takes one reading with no model turns: the load average, how full swap is, how long `git rev-parse HEAD` takes in up to three recent session worktrees, and how long the app's socket takes to say hello. Readings are numbers only (no names, paths or session ids), kept for a day in `responsiveness.jsonl` in the state folder. `shepherd responsiveness` judges them at the 95th percentile against the bar: the app answers in under 2 s, git in under 1 s, swap under 90% full. `shepherd responsiveness read` takes a reading first.
+Every pass of `shepherd watch --every` takes one reading with no model turns: the load average, the memory pressure level, pages swapped in per second, how full swap is, how long `git rev-parse HEAD` takes in up to three recent session worktrees, and how long the app's socket takes to say hello. Readings are numbers only (no names, paths or session ids), kept for a day in `responsiveness.jsonl` in the state folder. `shepherd responsiveness` judges them at the 95th percentile against the bar: the app answers in under 2 s, git in under 1 s, memory pressure below critical, and under 1,000 pages a second swapped in. How full swap is stays in the reading but is not a bar: macOS adds swap files as it needs them, so the percentage sits near full by design. `shepherd responsiveness read` takes a reading first.
 
 ## Stuck resume
 

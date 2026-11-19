@@ -230,9 +230,9 @@ export const COMMANDS = [
     },
   }),
   command({
-    name: 'responsiveness', summary: 'is the Mac still answering: load, swap, git and app answer times at p95 over the last day against the targets (app under 2 s, git under 1 s); read takes a reading first', effect: 'private',
+    name: 'responsiveness', summary: 'is the Mac still answering: load, memory pressure, swap-ins, git and app answer times at p95 over the last day against the targets (app under 2 s, git under 1 s, pressure below critical, swap-ins under 1,000 pages a second); read takes a reading first', effect: 'private',
     args: [sub('responsiveness', ['status', 'read'], 'status')],
-    output: '{ samples, appP95Ms, gitP95Ms, loadP95, swapP95Pct, ok, misses, reading }',
+    output: '{ samples, appP95Ms, gitP95Ms, loadP95, pressureP95, swapInsP95PerSec, swapP95Pct, ok, misses, reading }',
     exit: () => 'ok',
     text: (r) => renderResponsiveness(r),
     async run(input) {
