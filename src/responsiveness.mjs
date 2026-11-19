@@ -1,14 +1,17 @@
 // The responsiveness bar: is this Mac still answering while agents load it? Each pass takes three counts-only readings:
-// the load average, how full swap is, how long `git rev-parse HEAD` takes in a few session worktrees, and how long the
-// app's socket takes to say hello. Readings are kept for a day in responsiveness.jsonl (numbers only: no names, paths or
-// session ids) and judged at the 95th percentile against a target: the app under 2 s, git under 1 s.
+// the load average, the memory pressure level and pages swapped in per second, how long `git rev-parse HEAD` takes in a
+// few session worktrees, and how long the app's socket takes to say hello. Readings are kept for a day in
+// responsiveness.jsonl (numbers only: no names, paths or session ids) and judged at the 95th percentile against a
+// target: the app under 2 s, git under 1 s, memory pressure below critical, swap-ins under 1,000 pages a second.
+// How full swap is stays in each reading for the record but is not a bar: macOS adds swap files as it needs them, so the
+// percentage sits near full by design, and on this Mac it did not move with git or app slowness (correlation 0.05).
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { appReady } from './socket.mjs';
 
-export const TARGETS = { appMs: 2000, gitMs: 1000, swapPct: 90 };
+export const TARGETS = { appMs: 2000, gitMs: 1000, pressure: 4, swapInsPerSec: 1000 };
 export const KEEP_MS = 24 * 3600000;
 export const WORKTREES = 3;
 export const FILE = 'responsiveness.jsonl';
@@ -42,26 +45,34 @@ export async function sample(d, probes = realProbes(d)) {
   const at = d.now();
   const [load1] = probes.loadavg();
   const swapPct = await probes.swapPct().catch(() => null);
+  const pressure = await probes.pressure().catch(() => null);
+  const swapIns = await probes.swapIns().catch(() => null);
+  const last = readReadings(d, at).at(-1);
+  const secs = last ? (at - last.at) / 1000 : 0;
+  const swapInsPerSec = swapIns !== null && last?.swapIns != null && secs > 0 && swapIns >= last.swapIns ? Math.round((swapIns - last.swapIns) / secs) : null;
   const dirs = (await probes.worktrees().catch(() => [])).slice(0, WORKTREES);
   const gitMs = [];
   for (const dir of dirs) { const ms = await probes.gitMs(dir).catch(() => null); if (ms !== null) gitMs.push(ms); }
   const appMs = await probes.appMs().catch(() => null);
-  const reading = { at, load1: Math.round(load1 * 10) / 10, cores: probes.cores(), swapPct, gitMs, appMs };
+  const reading = { at, load1: Math.round(load1 * 10) / 10, cores: probes.cores(), swapPct, pressure, swapIns, swapInsPerSec, gitMs, appMs };
   record(d, reading, at);
   return reading;
 }
 
-// The verdict over the readings kept: p95 of git and app answer times, the worst recent load and swap, and which targets are missed.
+// The verdict over the readings kept: p95 of git and app answer times, the worst recent load, memory pressure and swap-in rate, and which targets are missed.
 export function judge(readings, targets = TARGETS) {
   const git = percentile(readings.flatMap((r) => r.gitMs || []), 95);
   const app = percentile(readings.map((r) => r.appMs), 95);
   const load = percentile(readings.map((r) => r.load1), 95);
   const swap = percentile(readings.map((r) => r.swapPct), 95);
+  const pressure = percentile(readings.map((r) => r.pressure), 95);
+  const swapIns = percentile(readings.map((r) => r.swapInsPerSec), 95);
   const misses = [];
   if (app !== null && app >= targets.appMs) misses.push(`the app answers in ${app} ms at p95, over ${targets.appMs} ms`);
   if (git !== null && git >= targets.gitMs) misses.push(`git answers in ${git} ms at p95, over ${targets.gitMs} ms`);
-  if (swap !== null && swap >= targets.swapPct) misses.push(`swap is ${swap}% full at p95, over ${targets.swapPct}%`);
-  return { samples: readings.length, appP95Ms: app, gitP95Ms: git, loadP95: load, swapP95Pct: swap, ok: misses.length === 0 && readings.length > 0, misses };
+  if (pressure !== null && pressure >= targets.pressure) misses.push('memory pressure is critical at p95');
+  if (swapIns !== null && swapIns >= targets.swapInsPerSec) misses.push(`${swapIns} pages a second are swapped in at p95, over ${targets.swapInsPerSec}`);
+  return { samples: readings.length, appP95Ms: app, gitP95Ms: git, loadP95: load, pressureP95: pressure, swapInsP95PerSec: swapIns, swapP95Pct: swap, ok: misses.length === 0 && readings.length > 0, misses };
 }
 
 export function render(v) {
@@ -72,7 +83,9 @@ export function render(v) {
     `  app answers  ${show(v.appP95Ms, ' ms')}  (target under ${TARGETS.appMs} ms)`,
     `  git          ${show(v.gitP95Ms, ' ms')}  (target under ${TARGETS.gitMs} ms)`,
     `  load average ${show(v.loadP95, '')}`,
-    `  swap used    ${show(v.swapP95Pct, '%')}  (target under ${TARGETS.swapPct}%)`,
+    `  memory       ${show(v.pressureP95, '')}  (pressure level, 1 normal, 2 warning, 4 critical; target below ${TARGETS.pressure})`,
+    `  swap-ins     ${show(v.swapInsP95PerSec, ' pages/s')}  (target under ${TARGETS.swapInsPerSec})`,
+    `  swap used    ${show(v.swapP95Pct, '%')}  (for the record, not a bar)`,
     ...v.misses.map((m) => `  miss: ${m}`),
   ].join('\n');
 }
@@ -87,6 +100,8 @@ export function realProbes(d) {
       const m = /total = ([\d.]+)M\s+used = ([\d.]+)M/.exec(await run('/usr/sbin/sysctl', ['-n', 'vm.swapusage']));
       return m && Number(m[1]) > 0 ? Math.round((Number(m[2]) / Number(m[1])) * 100) : null;
     },
+    pressure: async () => Number((await run('/usr/sbin/sysctl', ['-n', 'kern.memorystatus_vm_pressure_level'])).trim()),
+    swapIns: async () => Number(/Swapins:\s+(\d+)/.exec(await run('/usr/bin/vm_stat', []))?.[1] ?? NaN),
     worktrees: async () => (await d.sql(WORKTREE_SQL)).map((r) => r.path).filter((p) => p && fs.existsSync(p)),
     gitMs: async (dir) => {
       const t = process.hrtime.bigint();

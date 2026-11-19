@@ -10,6 +10,8 @@ const probes = (over = {}) => ({
   loadavg: () => [12.34, 10, 9],
   cores: () => 18,
   swapPct: async () => 40,
+  pressure: async () => 1,
+  swapIns: async () => 1000,
   worktrees: async () => ['/a', '/b', '/c', '/d'],
   gitMs: async () => 20,
   appMs: async () => 150,
@@ -28,7 +30,7 @@ test('a sample times at most three worktrees, keeps numbers only, and survives a
   const asked = [];
   const r = await sample(d, probes({ gitMs: async (dir) => { asked.push(dir); if (dir === '/b') throw new Error('not a repo'); return 20; }, appMs: async () => { throw new Error('down'); } }));
   assert.deepEqual(asked, ['/a', '/b', '/c']);
-  assert.deepEqual(r, { at: 1e12, load1: 12.3, cores: 18, swapPct: 40, gitMs: [20, 20], appMs: null });
+  assert.deepEqual(r, { at: 1e12, load1: 12.3, cores: 18, swapPct: 40, pressure: 1, swapIns: 1000, swapInsPerSec: null, gitMs: [20, 20], appMs: null });
   assert.deepEqual(readReadings(d), [r]);
   assert.ok(!fs.readFileSync(path.join(d.state, 'responsiveness.jsonl'), 'utf8').includes('/a'), 'no paths are recorded');
 });
@@ -42,11 +44,25 @@ test('readings older than a day are dropped when the next one is written', async
 });
 
 test('the verdict misses a target at p95 and names it', () => {
-  const calm = Array.from({ length: 20 }, (_, i) => ({ at: i, load1: 5, swapPct: 50, gitMs: [i === 19 ? 60000 : 30], appMs: 100 }));
+  const calm = Array.from({ length: 20 }, (_, i) => ({ at: i, load1: 5, swapPct: 50, pressure: 1, swapInsPerSec: 0, gitMs: [i === 19 ? 60000 : 30], appMs: 100 }));
   assert.equal(judge(calm).ok, true, 'one slow probe in twenty is under p95');
-  const hot = { load1: 80, swapPct: 97, gitMs: [60000], appMs: 5000 };
+  const hot = { load1: 80, swapPct: 97, pressure: 4, swapInsPerSec: 5000, gitMs: [60000], appMs: 5000 };
   const bad = judge([...calm, { at: 99, ...hot }, { at: 100, ...hot }]);
   assert.equal(bad.ok, false);
-  assert.equal(bad.misses.length, 3);
+  assert.equal(bad.misses.length, 4);
   assert.equal(judge([]).ok, false);
+});
+
+test('the swap-in rate comes from the counter since the last reading, and a counter reset gives none', async () => {
+  const d = fresh(1e12);
+  await sample(d, probes({ swapIns: async () => 1000 }));
+  d.now = () => 1e12 + 60000;
+  assert.equal((await sample(d, probes({ swapIns: async () => 1000 + 60 * 5000 }))).swapInsPerSec, 5000);
+  d.now = () => 1e12 + 120000;
+  assert.equal((await sample(d, probes({ swapIns: async () => 10 }))).swapInsPerSec, null);
+});
+
+test('a Mac with swap nearly full but no pressure and no swap-ins is on target', () => {
+  const calm = Array.from({ length: 20 }, (_, i) => ({ at: i, load1: 40, swapPct: 97, pressure: 1, swapInsPerSec: 0, gitMs: [30], appMs: 10 }));
+  assert.equal(judge(calm).ok, true);
 });
