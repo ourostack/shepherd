@@ -12,6 +12,7 @@ import { runDueWakes, wakesConfig } from './wakes.mjs';
 import { resumeStuck, stuckResumeConfig } from './stuck-resume.mjs';
 import { trustAll, trustConfig } from './trust.mjs';
 import { inboxConfig, pollInboxes } from './inbox.mjs';
+import { morning as signinMorning } from './signin.mjs';
 import { listenPrompts } from './prompts.mjs';
 import { approveStalePlans } from './plan-backstop.mjs';
 import { sample as sampleResponsiveness } from './responsiveness.mjs';
@@ -140,6 +141,14 @@ export function watchDuties({ copilotHome, quiet = false, say = () => {}, log = 
         }
         const n = results.reduce((sum, r) => sum + (r.done?.length ?? 0), 0);
         if (!quiet && n) say(`inbox: ${n} agent-caused notification(s) marked done`);
+      },
+    },
+    {
+      name: 'morning sign-ins',
+      run: async () => {
+        const r = await signinMorning(deps({ copilotHome }));
+        if (r.error) log(`shepherd: morning sign-ins: ${r.error}`);
+        if (!quiet && r.sent) say(`morning sign-ins: ${r.count} item(s) sent as one message`);
       },
     },
   ];
