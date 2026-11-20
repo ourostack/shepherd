@@ -75,3 +75,43 @@ test('the CLI queues, previews the batch and marks done', () => {
     assert.equal(JSON.parse(run(['signin', 'status', id]).stdout).state, 'done');
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
+
+const NASTY = 'GITHUB_BROWSER_RESEED=1 node -e \'import("/x/browser.mjs").then(async m=>{console.log(`a $HOME`)})\' && echo "q" > /dev/null\nsecond line $(date) `x`';
+
+test('a resume command is stored and shown byte for byte, through the CLI too', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'signin-cli-'));
+  const bin = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'shepherd.mjs');
+  const run = (args) => spawnSync(process.execPath, [bin, ...args, '--json', '--copilot-home', home], { encoding: 'utf8', env: { ...process.env, HOME: home, SHEPHERD_SIGNIN_CONFIG: path.join(home, 'none.json') } });
+  try {
+    const { id } = JSON.parse(run(['signin', 'queue', '--what', 'w', '--why', 'y', '--resume', NASTY]).stdout);
+    const s = JSON.parse(run(['signin', 'status', id]).stdout);
+    assert.equal(s.resume, NASTY);
+    assert.equal(s.what, 'w');
+    assert.equal(s.state, 'open');
+    assert.ok(JSON.parse(run(['signin', 'preview']).stdout).message.includes(NASTY));
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('the same tool asking again for the same thing merges, even with different words; a key merges across tools', () => {
+  const w = world(EARLY);
+  const a = queue(w.d, ITEM);
+  assert.equal(a.merged, undefined);
+  const b = queue(w.d, { ...ITEM, why: 'rephrased', resume: 'other command' });
+  assert.deepEqual([b.id, b.merged], [a.id, true]);
+  assert.equal(list(w.d).length, 1);
+  const k = queue(w.d, { ...ITEM, what: 'one', tool: 't1', key: 'k' });
+  assert.equal(queue(w.d, { ...ITEM, what: 'two', tool: 't2', key: 'k' }).id, k.id);
+  assert.equal(list(w.d).length, 2);
+});
+
+test('an item for someone else is recorded but never goes in the owner batch', async () => {
+  const w = world(MORNING);
+  const o = queue(w.d, { ...ITEM, forWhom: 'the operator' });
+  assert.equal(o.for, undefined);
+  const x = queue(w.d, { ...ITEM, what: 'theirs', forWhom: 'Alex' });
+  assert.equal(x.for, 'Alex');
+  const sent = [];
+  await morning(w.d, cfg, async (s, m) => { sent.push(m); return { ok: true }; });
+  assert.match(sent[0], /1 thing waiting[\s\S]*GitHub passkey/);
+  assert.doesNotMatch(sent[0], /theirs/);
+});

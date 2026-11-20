@@ -313,22 +313,26 @@ export const COMMANDS = [
       why: { type: 'string', placeholder: '<why>', description: 'queue: what is waiting on it' },
       resume: { type: 'string', placeholder: '<command>', description: 'queue: the one command that resumes the flow once it is done' },
       tool: { type: 'string', placeholder: '<tool>', description: 'queue: the tool that asked (agent by default)' },
+      key: { type: 'string', placeholder: '<key>', description: 'queue: a stable key; a repeat with the same key merges into the open item' },
+      for: { type: 'string', placeholder: '<person>', description: 'queue: whose it is, when not the owner; that item is never in the owner\'s morning batch' },
     },
-    output: 'queue: { id, what, why, resume, tool, at, doneAt }; list: { items }; preview: { due, session, hour, items, message }; done: { done }; status: { id, state: "open" | "done" }',
+    output: 'queue: { id, what, why, resume, tool, at, doneAt }; list: { items }; preview: { due, session, hour, items, message }; done: { done }; status: { ...item, state: "open" | "done" }',
     exit: () => 'ok',
     text: (r) => textOf(r),
     async run(input) {
       takes('signin', ['queue', 'list', 'preview', 'done', 'status'], input.action, 'shepherd signin list');
       const d = deps({ copilotHome: copilotHome(input) });
       const id = input.action ?? 'list';
-      const show = (i) => `${i.id}  ${i.what}: ${i.why}  (resume: ${i.resume})`;
+      const show = (i) => `${i.id}  ${i.what}: ${i.why}  (resume: ${i.resume})${i.for ? `  [for ${i.for}]` : ''}`;
       if (id === 'queue') {
-        const item = signin.queue(d, input);
+        const item = signin.queue(d, { ...input, forWhom: input.for });
+        if (item.merged) return withText(item, `merged into open item ${item.id} (same ${item.key ? 'key' : 'tool and what'}); nothing new queued. It resumes with: ${item.resume}`);
+        if (item.for) return withText(item, `queued ${item.id} for ${item.for}, not the owner: it stays out of the owner's morning batch. It resumes with: ${item.resume}`);
         return withText(item, `queued ${item.id} for the morning: ${item.what}. Keep working; it resumes with: ${item.resume}`);
       }
       if (id === 'preview') {
         const cfg = signin.signinConfig();
-        const items = signin.list(d);
+        const items = signin.mine(signin.list(d));
         const message = signin.batchMessage(items);
         return withText({ due: signin.due(d, cfg), session: cfg.session, hour: cfg.hour, items, message }, message ?? 'nothing is queued for the morning');
       }
@@ -337,7 +341,7 @@ export const COMMANDS = [
         if (id === 'status') {
           const item = signin.status(d, input.id);
           if (!item) throw usage('signin', `no item ${input.id}`, 'shepherd signin list');
-          return withText({ id: item.id, state: item.doneAt ? 'done' : 'open' }, item.doneAt ? 'done' : 'open');
+          return withText({ ...item, state: item.doneAt ? 'done' : 'open' }, item.doneAt ? 'done' : 'open');
         }
         const marked = signin.done(d, input.id);
         return withText({ done: marked }, marked.length ? marked.map((i) => `done ${show(i)}`).join('\n') : 'nothing open matched');

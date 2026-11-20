@@ -26,17 +26,24 @@ export function signinConfig(file = signinFile()) {
 const read = (d) => { const q = readJson(queueFile(d), {}); return { items: Array.isArray(q.items) ? q.items : [], lastSent: q.lastSent ?? null }; };
 const write = (d, q) => writeJson(queueFile(d), q);
 
-// Queues one item and returns it. The same tool asking for the same thing again returns the open item instead of a second one.
-export function queue(d, { what, why, resume, tool }) {
-  const clean = { what: plain(what ?? '', 160), why: plain(why ?? '', 240), resume: plain(resume ?? '', 300), tool: plain(tool ?? 'agent', 60) };
+// Queues one item and returns it. A repeat of an open item (the same key, else the same tool asking for the same thing) is merged into
+// it: the open item comes back with merged: true and nothing new is recorded. The resume command is stored exactly as given; only the
+// owner-facing what and why are flattened. `forWhom` names someone other than the owner; that item is recorded but never goes in the owner's batch.
+export function queue(d, { what, why, resume, tool, key, forWhom }) {
+  const clean = { what: plain(what ?? '', 160), why: plain(why ?? '', 240), resume: typeof resume === 'string' ? resume.trim().slice(0, 2000) : '', tool: plain(tool ?? 'agent', 60) };
   if (!clean.what || !clean.why || !clean.resume) throw new ShepherdError({ code: 'signin-item', problem: 'an item needs what, why and the command that resumes it', fix: 'shepherd signin queue --what "<what to sign in to>" --why "<what is waiting>" --resume "<the one command>"' });
+  const extra = { ...(key ? { key: plain(key, 80) } : {}), ...(forWhom && !isOwner(forWhom) ? { for: plain(forWhom, 60) } : {}) };
   const q = read(d);
-  const open = q.items.find((i) => !i.doneAt && i.tool === clean.tool && i.what === clean.what && i.resume === clean.resume);
-  if (open) return open;
-  const item = { id: crypto.createHash('sha256').update(`${clean.tool}|${clean.what}|${clean.resume}|${d.now()}`).digest('hex').slice(0, 8), ...clean, at: new Date(d.now()).toISOString(), doneAt: null };
+  const open = q.items.find((i) => !i.doneAt && (extra.key ? i.key === extra.key : !i.key && i.tool === clean.tool && i.what === clean.what));
+  if (open) return { ...open, merged: true };
+  const item = { id: crypto.createHash('sha256').update(`${clean.tool}|${clean.what}|${clean.resume}|${d.now()}`).digest('hex').slice(0, 8), ...clean, ...extra, at: new Date(d.now()).toISOString(), doneAt: null };
   write(d, { ...q, items: [...q.items, item] });
   return item;
 }
+
+const isOwner = (who) => /^(owner|the owner|operator|the operator)?$/i.test(String(who).trim());
+// Open items that go in the owner's morning batch; items for someone else wait for them.
+export const mine = (items) => items.filter((i) => !i.for);
 
 export const list = (d) => read(d).items.filter((i) => !i.doneAt);
 export const status = (d, id) => read(d).items.find((i) => i.id === id) ?? null;
@@ -61,7 +68,7 @@ export function batchMessage(items) {
   if (!items.length) return null;
   return [
     `Morning sign-ins: ${items.length} thing${items.length === 1 ? '' : 's'} waiting on the owner. Tell the owner on Teams as one message; they do them in one sitting, then run each resume command and \`shepherd signin done <id>\`.`,
-    ...items.map((i, n) => `${n + 1}. [${i.id}] ${i.what}: ${i.why}. Resume: ${i.resume}`),
+    ...items.map((i, n) => `${n + 1}. [${i.id}] ${i.what}: ${i.why}. Resume: ${/\n/.test(i.resume) ? `\n\`\`\`\n${i.resume}\n\`\`\`` : i.resume}`),
   ].join('\n');
 }
 
@@ -71,13 +78,13 @@ const dayKey = (ms) => { const t = new Date(ms); return `${t.getFullYear()}-${t.
 export const due = (d, cfg) => {
   const q = read(d);
   const now = d.now();
-  return !!(cfg.session ?? identityId(d)) && new Date(now).getHours() >= cfg.hour && q.lastSent !== dayKey(now) && q.items.some((i) => !i.doneAt);
+  return !!(cfg.session ?? identityId(d)) && new Date(now).getHours() >= cfg.hour && q.lastSent !== dayKey(now) && q.items.some((i) => !i.doneAt && !i.for);
 };
 
 // Sends the batch when it is due. `send` is injected for tests. Resolves { sent, count, error }.
 export async function morning(d, cfg = signinConfig(), send = wakeSender(d)) {
   if (!due(d, cfg)) return { sent: false, count: 0, error: null };
-  const items = list(d);
+  const items = mine(list(d));
   const r = await send(cfg.session ?? identityId(d), batchMessage(items), 'enqueue');
   if (!r.ok) return { sent: false, count: items.length, error: r.error };
   write(d, { ...read(d), lastSent: dayKey(d.now()) });
