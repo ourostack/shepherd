@@ -252,3 +252,7 @@ Types ship in `src/index.d.ts`.
 ## Develop
 
 `npm test` runs every test against fakes. Nothing touches a real app.
+
+## Running agents on scratch work
+
+Set `SHEPHERD_HOME=<scratch folder>` and Shepherd treats it as the home folder: its state, config and Copilot paths all sit under it, so an agent that runs `shepherd` there (a skill evaluation, say) cannot touch the real queue, config or app.
