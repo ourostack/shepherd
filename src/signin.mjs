@@ -6,7 +6,7 @@
 import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import { readJson, writeJson } from './store.mjs';
+import { identityId, readJson, writeJson } from './store.mjs';
 import { plain } from './notice.mjs';
 import { ShepherdError } from './error.mjs';
 import { wakeSender } from './wakes.mjs';
@@ -15,7 +15,8 @@ export const signinFile = (env = process.env, home = os.homedir()) => env.SHEPHE
 export const queueFile = (d) => path.join(d.state, 'signin-queue.json');
 export const DEFAULT_HOUR = 8;
 
-// { session, hour }: the session that gets the morning message (Ouroboros' chat, which tells the owner) and the local hour it goes out.
+// { session, hour }: the session that gets the morning message and the local hour it goes out. With no session named, Ouroboros' own chat
+// (the stored identity) gets it: it is the one that tells the owner on Teams.
 export function signinConfig(file = signinFile()) {
   const obj = readJson(file, {});
   const hour = Number.isInteger(obj.hour) && obj.hour >= 0 && obj.hour <= 23 ? obj.hour : DEFAULT_HOUR;
@@ -59,7 +60,7 @@ export function done(d, id) {
 export function batchMessage(items) {
   if (!items.length) return null;
   return [
-    `Morning sign-ins: ${items.length} thing${items.length === 1 ? '' : 's'} waiting on the owner. Tell them as one message, they do them in one sitting, then run each resume command and \`shepherd signin done <id>\`.`,
+    `Morning sign-ins: ${items.length} thing${items.length === 1 ? '' : 's'} waiting on the owner. Tell the owner on Teams as one message; they do them in one sitting, then run each resume command and \`shepherd signin done <id>\`.`,
     ...items.map((i, n) => `${n + 1}. [${i.id}] ${i.what}: ${i.why}. Resume: ${i.resume}`),
   ].join('\n');
 }
@@ -70,14 +71,14 @@ const dayKey = (ms) => { const t = new Date(ms); return `${t.getFullYear()}-${t.
 export const due = (d, cfg) => {
   const q = read(d);
   const now = d.now();
-  return !!cfg.session && new Date(now).getHours() >= cfg.hour && q.lastSent !== dayKey(now) && q.items.some((i) => !i.doneAt);
+  return !!(cfg.session ?? identityId(d)) && new Date(now).getHours() >= cfg.hour && q.lastSent !== dayKey(now) && q.items.some((i) => !i.doneAt);
 };
 
 // Sends the batch when it is due. `send` is injected for tests. Resolves { sent, count, error }.
 export async function morning(d, cfg = signinConfig(), send = wakeSender(d)) {
   if (!due(d, cfg)) return { sent: false, count: 0, error: null };
   const items = list(d);
-  const r = await send(cfg.session, batchMessage(items), 'enqueue');
+  const r = await send(cfg.session ?? identityId(d), batchMessage(items), 'enqueue');
   if (!r.ok) return { sent: false, count: items.length, error: r.error };
   write(d, { ...read(d), lastSent: dayKey(d.now()) });
   return { sent: true, count: items.length, error: null };
