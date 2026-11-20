@@ -40,7 +40,7 @@ test('the morning goes out as one message, once a day, only from the hour, and o
   assert.equal((await morning(w.d, cfg, send)).sent, true);
 });
 
-test('a failed send leaves the batch to go out on the next pass, and no session named means Ouroboros' own chat, and with none stored no send', async () => {
+test('a failed send leaves the batch to go out on the next pass, and no session named means the Ouroboros chat, and with none stored no send', async () => {
   const w = world(MORNING);
   queue(w.d, ITEM);
   assert.equal((await morning(w.d, cfg, async () => ({ ok: false, error: 'down' }))).error, 'down');
