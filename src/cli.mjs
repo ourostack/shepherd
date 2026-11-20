@@ -15,6 +15,7 @@ import { ShepherdError, deps, inboxConfig, inboxFile, inboxStatus, pollInboxes, 
 import { judge as judgeResponsiveness, readReadings as readResponsiveness, render as renderResponsiveness, sample as sampleResponsiveness } from './responsiveness.mjs';
 import { renderRetire, retireConfig, retireDeps, retireFile, watchRetire } from './retire.mjs';
 import { counts, healthDeps, pass, readWatch, renderWatch } from './health-watch.mjs';
+import * as signin from './signin.mjs';
 import { install } from './install.mjs';
 import { blockCloud, clearCloud, place, renderPlace, renderReport, report } from './place.mjs';
 import { renderQuota, renderReadings } from './quota.mjs';
@@ -302,6 +303,47 @@ export const COMMANDS = [
       if (id === 'cloud-open') { const kept = clearCloud(d, { repo }); return withText({ blocks: kept }, `cloud 403 windows left: ${kept.length}`); }
       const r = await place(d, { repo, local: input.local === true, miniOnly: input['mini-only'] === true });
       return withText(r, renderPlace(r));
+    },
+  }),
+  command({
+    name: 'signin', summary: 'the morning sign-in queue: an agent flow that needs the owner to sign in or approve queues one item (queue) and keeps working; preview shows the one morning message; done marks items done; status reads one', effect: 'private',
+    args: [sub('signin', ['queue', 'list', 'preview', 'done', 'status'], 'list'), { name: 'id', description: 'done and status: the item id (done also takes "all")', required: false }],
+    flags: {
+      what: { type: 'string', placeholder: '<what>', description: 'queue: what the owner signs in to or approves' },
+      why: { type: 'string', placeholder: '<why>', description: 'queue: what is waiting on it' },
+      resume: { type: 'string', placeholder: '<command>', description: 'queue: the one command that resumes the flow once it is done' },
+      tool: { type: 'string', placeholder: '<tool>', description: 'queue: the tool that asked (agent by default)' },
+    },
+    output: 'queue: { id, what, why, resume, tool, at, doneAt }; list: { items }; preview: { due, session, hour, items, message }; done: { done }; status: { id, state: "open" | "done" }',
+    exit: () => 'ok',
+    text: (r) => textOf(r),
+    async run(input) {
+      takes('signin', ['queue', 'list', 'preview', 'done', 'status'], input.action, 'shepherd signin list');
+      const d = deps({ copilotHome: copilotHome(input) });
+      const id = input.action ?? 'list';
+      const show = (i) => `${i.id}  ${i.what}: ${i.why}  (resume: ${i.resume})`;
+      if (id === 'queue') {
+        const item = signin.queue(d, input);
+        return withText(item, `queued ${item.id} for the morning: ${item.what}. Keep working; it resumes with: ${item.resume}`);
+      }
+      if (id === 'preview') {
+        const cfg = signin.signinConfig();
+        const items = signin.list(d);
+        const message = signin.batchMessage(items);
+        return withText({ due: signin.due(d, cfg), session: cfg.session, hour: cfg.hour, items, message }, message ?? 'nothing is queued for the morning');
+      }
+      if (id === 'done' || id === 'status') {
+        if (!input.id) throw usage('signin', `${id} needs an item id`, `shepherd signin ${id} <id>`);
+        if (id === 'status') {
+          const item = signin.status(d, input.id);
+          if (!item) throw usage('signin', `no item ${input.id}`, 'shepherd signin list');
+          return withText({ id: item.id, state: item.doneAt ? 'done' : 'open' }, item.doneAt ? 'done' : 'open');
+        }
+        const marked = signin.done(d, input.id);
+        return withText({ done: marked }, marked.length ? marked.map((i) => `done ${show(i)}`).join('\n') : 'nothing open matched');
+      }
+      const items = signin.list(d);
+      return withText({ items }, items.length ? items.map(show).join('\n') : 'nothing is queued for the morning');
     },
   }),
   command({
