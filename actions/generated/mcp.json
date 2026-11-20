@@ -1,5 +1,5 @@
 {
-  "generator": "ouro-actions 0.17.6",
+  "generator": "ouro-actions 1.4.1",
   "set": "shepherd",
   "tools": [
     {
@@ -219,6 +219,9 @@
         "destructiveHint": true,
         "openWorldHint": true
       },
+      "_meta": {
+        "ouro.bot/confirm": "Send a message to a session, as a peer message."
+      },
       "outputSchema": {
         "type": "object",
         "properties": {
@@ -261,6 +264,9 @@
         "destructiveHint": true,
         "openWorldHint": true
       },
+      "_meta": {
+        "ouro.bot/confirm": "Make a session on a project (or a chat), optionally with a first prompt."
+      },
       "outputSchema": {
         "type": "object",
         "properties": {
@@ -301,6 +307,9 @@
         "readOnlyHint": false,
         "destructiveHint": true,
         "openWorldHint": true
+      },
+      "_meta": {
+        "ouro.bot/confirm": "Answer a question the watch heard the session ask."
       },
       "outputSchema": {
         "type": "object",
@@ -347,6 +356,9 @@
         "destructiveHint": true,
         "openWorldHint": true
       },
+      "_meta": {
+        "ouro.bot/confirm": "Approve or reject a plan the watch heard a session offer."
+      },
       "outputSchema": {
         "type": "object",
         "properties": {
@@ -386,6 +398,9 @@
         "readOnlyHint": false,
         "destructiveHint": true,
         "openWorldHint": true
+      },
+      "_meta": {
+        "ouro.bot/confirm": "Archive a session this agent created, or one the owner asked to archive."
       },
       "outputSchema": {
         "type": "object",
@@ -431,6 +446,9 @@
         "destructiveHint": true,
         "openWorldHint": true
       },
+      "_meta": {
+        "ouro.bot/confirm": "A session's automations (with no fields), replace one, or clear it."
+      },
       "outputSchema": {
         "type": "object",
         "properties": {
@@ -466,6 +484,9 @@
         "readOnlyHint": false,
         "destructiveHint": true,
         "openWorldHint": true
+      },
+      "_meta": {
+        "ouro.bot/confirm": "Run one workflow now."
       },
       "outputSchema": {
         "type": "object",
