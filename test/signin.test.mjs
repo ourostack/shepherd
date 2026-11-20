@@ -115,3 +115,17 @@ test('an item for someone else is recorded but never goes in the owner batch', a
   assert.match(sent[0], /1 thing waiting[\s\S]*GitHub passkey/);
   assert.doesNotMatch(sent[0], /theirs/);
 });
+
+test('with SHEPHERD_HOME set, a queue call lands under it and leaves the real home untouched', () => {
+  const real = fs.mkdtempSync(path.join(os.tmpdir(), 'signin-real-'));
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'signin-scratch-'));
+  const bin = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'shepherd.mjs');
+  const env = { ...process.env, HOME: real, SHEPHERD_HOME: scratch };
+  for (const k of ['SHEPHERD_SIGNIN_CONFIG']) delete env[k];
+  try {
+    const r = spawnSync(process.execPath, [bin, 'signin', 'queue', '--what', 'w', '--why', 'y', '--resume', 'x', '--json'], { encoding: 'utf8', env });
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(fs.readdirSync(real), []);
+    assert.ok(fs.existsSync(path.join(scratch, 'Library', 'Caches', 'shepherd', 'signin-queue.json')));
+  } finally { fs.rmSync(real, { recursive: true, force: true }); fs.rmSync(scratch, { recursive: true, force: true }); }
+});
