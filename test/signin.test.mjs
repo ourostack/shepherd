@@ -40,12 +40,16 @@ test('the morning goes out as one message, once a day, only from the hour, and o
   assert.equal((await morning(w.d, cfg, send)).sent, true);
 });
 
-test('a failed send leaves the batch to go out on the next pass, and no session means no send', async () => {
+test('a failed send leaves the batch to go out on the next pass, and no session named means Ouroboros' own chat, and with none stored no send', async () => {
   const w = world(MORNING);
   queue(w.d, ITEM);
   assert.equal((await morning(w.d, cfg, async () => ({ ok: false, error: 'down' }))).error, 'down');
   assert.equal(due(w.d, cfg), true);
   assert.equal(due(w.d, { ...cfg, session: null }), false);
+  fs.writeFileSync(path.join(w.state, 'identity.json'), JSON.stringify({ session_id: 'bbbbbbbb-0000-4000-8000-0000000000b1' }));
+  const sent = [];
+  await morning(w.d, { ...cfg, session: null }, async (session) => { sent.push(session); return { ok: true }; });
+  assert.deepEqual(sent, ['bbbbbbbb-0000-4000-8000-0000000000b1']);
 });
 
 test('done resumes the flow: status reads done, the item leaves the batch', () => {

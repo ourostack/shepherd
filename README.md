@@ -167,7 +167,7 @@ Write `~/.config/shepherd/wakes.json`:
 
 ## The morning sign-in queue
 
-No agent tool prompts the owner to sign in or approve something live (a QR code, a passkey, a device code, MFA, a headful browser sign-in, GitHub sudo). A flow that needs one runs `shepherd signin queue --what "<what to sign in to>" --why "<what is waiting>" --resume "<the one command>" [--tool <name>]` and carries on with other work. Once each morning (`hour` in `~/.config/shepherd/signin.json`, 8 by default; `SHEPHERD_SIGNIN_CONFIG` overrides the file) the watch sends every open item as one message to the `session` that file names (Ouroboros' chat, which tells the owner). The owner does them in one sitting; each flow then resumes with its own command, and `shepherd signin done <id|all>` clears them. `shepherd signin preview` shows the next batch, `list` the open items, and `status <id>` reads one (`open` or `done`).
+No agent tool prompts the owner to sign in or approve something live (a QR code, a passkey, a device code, MFA, a headful browser sign-in, GitHub sudo). A flow that needs one runs `shepherd signin queue --what "<what to sign in to>" --why "<what is waiting>" --resume "<the one command>" [--tool <name>]` and carries on with other work. Once each morning (`hour` in `~/.config/shepherd/signin.json`, 8 by default; `SHEPHERD_SIGNIN_CONFIG` overrides the file) the watch sends every open item as one message to the `session` that file names, else to Ouroboros' own chat, which tells the owner on Teams. The owner does them in one sitting; each flow then resumes with its own command, and `shepherd signin done <id|all>` clears them. `shepherd signin preview` shows the next batch, `list` the open items, and `status <id>` reads one (`open` or `done`).
 
 ## The GitHub inbox
 
