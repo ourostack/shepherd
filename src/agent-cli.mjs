@@ -3,7 +3,7 @@
 // false); without it, a short text. Keys in the JSON input are the tool arguments the operations take (session_id,
 // delivery_mode, kickoff: { prompt, mode, … }); flags are their kebab-case names, and a flag wins over the input. A message to
 // a session goes as a peer message from Ouroboros; --as-user sends the owner's own relayed words as a labelled user prompt.
-import { defineCommand } from '../lib/ouro-ui/registry/ouro/ax/command.ts';
+import { defineCommand } from '../lib/ouro-ui/registry/ouro/ax/ax-command.ts';
 import { AxError, errorLine } from '../lib/ouro-ui/registry/ouro/ax/problem.ts';
 import { outcome } from '../lib/ouro-ui/registry/ouro/ax/outcome.ts';
 import { deps } from './sessions.mjs';
