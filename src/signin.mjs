@@ -187,6 +187,7 @@ export async function morning(d, cfg = signinConfig(), send = wakeSender(d), sen
     const r = await sendPersonal(cfg.personal.card, personalMessage(p.personal, { owner: cfg.personal.owner, now: d.now() }));
     if (r.ok) {
       route = 'sent';
+      if (r.unconfirmed) personalError = 'sent, but the agent did not answer in time';
       count += p.personal.length;
       mark({ lastSentPersonal: today, personalRetryAt: null });
     } else {
@@ -198,7 +199,7 @@ export async function morning(d, cfg = signinConfig(), send = wakeSender(d), sen
   const quiet = { ...(p.work.length ? {} : { lastSent: today }), ...(p.personal.length ? {} : { lastSentPersonal: today }) };
   if (!toSession.length) {
     if (count) mark(quiet);
-    return { sent: count > 0, count, error: personalError, personal: route, personalError };
+    return { sent: count > 0, count, error: route === 'sent' ? null : personalError, personal: route, personalError };
   }
   const r = await send(session, [route === 'fallback' && fallbackNote(cfg.personal.name), batchMessage(toSession)].filter(Boolean).join('\n'), 'enqueue');
   if (!r.ok) return { sent: count > 0, count, error: r.error, personal: route, personalError };
