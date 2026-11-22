@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { batchMessage, done, due, list, morning, ouroSender, personalMessage, queue, scopeOf, signinConfig, split, status } from '../src/signin.mjs';
+import { RETRY_MS, batchMessage, done, due, list, morning, ouroSender, personalMessage, queue, scopeOf, signinConfig, split, status } from '../src/signin.mjs';
 
 const MORNING = new Date(2026, 10, 17, 8, 5).getTime();
 const EARLY = new Date(2026, 10, 17, 6, 0).getTime();
@@ -138,6 +138,8 @@ test('work is Microsoft, Teams and the configured work patterns; everything else
   assert.equal(scopeOf(WORK), 'work');
   assert.equal(scopeOf({ ...ITEM, why: 'a Teams meeting bot needs approval' }), 'work');
   assert.equal(scopeOf(ITEM), 'personal');
+  assert.equal(scopeOf({ ...ITEM, why: 'add a member to the GitHub teams page' }), 'personal');
+  assert.equal(scopeOf({ ...ITEM, resume: 'node ~/microsoft-notes/x.mjs' }), 'personal');
   assert.equal(scopeOf({ ...ITEM, why: 'GitHub is waiting for approval to x (work GitHub account a_b)' }), 'work');
   assert.equal(scopeOf({ ...ITEM, why: 'GitHub is waiting for approval to x (GitHub account a)' }), 'personal');
   assert.equal(scopeOf({ ...ITEM, resume: 'gh -R example-corp/tool run' }, ['Example-Corp/']), 'work');
@@ -152,7 +154,7 @@ test('signin.json names the personal agent by its card; without one the batch is
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'signin-cfg-'));
   const file = path.join(dir, 'signin.json');
   fs.writeFileSync(file, JSON.stringify({ hour: 9, personal: { card: 'http://x/card', name: 'Pip', owner: 'Sam' }, work: ['acme/', 3] }));
-  assert.deepEqual(signinConfig(file), { session: null, hour: 9, personal: { card: 'http://x/card', name: 'Pip', owner: 'Sam', ouro: 'ouro', identityFile: null }, work: ['acme/'] });
+  assert.deepEqual(signinConfig(file), { session: null, hour: 9, personal: { card: 'http://x/card', name: 'Pip', owner: 'Sam', ouro: null, identityFile: null }, work: ['acme/'] });
   fs.writeFileSync(file, JSON.stringify({ personal: { name: 'Pip' } }));
   assert.equal(signinConfig(file).personal, null);
 });
@@ -187,7 +189,8 @@ test('when the personal agent cannot be reached, its items go to the session wit
   const r = await morning(w.d, { ...pcfg, personal: { ...PERSONAL, name: 'Pip' } }, async (s, m) => { toSession.push(m); return { ok: true }; }, async () => ({ ok: false, error: 'fetch failed' }));
   assert.deepEqual([r.sent, r.count, r.personal], [true, 2, 'fallback']);
   assert.equal(toSession.length, 1);
-  assert.match(toSession[0], /^Pip unreachable, so this came here\. \(fetch failed\)\n/);
+  assert.match(toSession[0], /^Pip unreachable, so this came here\.\n/);
+  assert.equal(r.personalError, 'fetch failed');
   assert.match(toSession[0], /2 things waiting[\s\S]*Microsoft sign-in[\s\S]*GitHub passkey/);
   assert.equal(due(w.d, pcfg), false);
 });
@@ -233,6 +236,36 @@ test('the sender runs ouro a2a message with the card, the text, --json and --why
   assert.deepEqual(calls[1][1].slice(-2), ['--identity-file', '/k/id.json']);
   assert.deepEqual(await send((cb) => cb(Object.assign(new Error('exit 1')), '', 'fetch failed: ECONNREFUSED')), { ok: false, error: 'fetch failed: ECONNREFUSED' });
   assert.deepEqual(await send((cb) => cb(new Error('exit 1'), '{"ok":false,"reason":"not-a-friend"}', '')), { ok: false, error: 'not-a-friend' });
+  assert.deepEqual(await send((cb) => cb(Object.assign(new Error('timed out'), { killed: true, signal: 'SIGTERM' }), '', '')), { ok: true, error: null, unconfirmed: true });
+  assert.deepEqual(await ouroSender({ ...PERSONAL, ouro: null }, fake(() => assert.fail('ran')), () => null)('c', 't'), { ok: false, error: 'the ouro CLI was not found' });
+});
+
+test('a personal-only morning counts the work route as sent too, so a work item queued later waits for tomorrow, and the reverse', async () => {
+  const w = world(MORNING);
+  queue(w.d, ITEM);
+  await morning(w.d, pcfg, async () => assert.fail('no work items yet'), async () => ({ ok: true }));
+  queue(w.d, WORK);
+  assert.equal(due(w.d, pcfg), false);
+  const w2 = world(MORNING);
+  queue(w2.d, WORK);
+  await morning(w2.d, pcfg, async () => ({ ok: true }), async () => assert.fail('no personal items yet'));
+  queue(w2.d, ITEM);
+  assert.equal(due(w2.d, pcfg), false);
+});
+
+test('with no session to fall back to, a failed personal agent is tried again after the retry window, not every pass', async () => {
+  const w = world(MORNING);
+  queue(w.d, ITEM);
+  const c = { ...pcfg, session: null };
+  let tries = 0;
+  const failing = async () => { tries++; return { ok: false, error: 'fetch failed' }; };
+  const r = await morning(w.d, c, async () => assert.fail('no session'), failing);
+  assert.deepEqual([r.sent, r.error], [false, 'fetch failed']);
+  assert.equal(due(w.d, c), false);
+  w.now = MORNING + RETRY_MS + 1;
+  assert.equal(due(w.d, c), true);
+  await morning(w.d, c, async () => assert.fail('no session'), failing);
+  assert.equal(tries, 2);
 });
 
 test('the CLI preview shows the split when signin.json names a personal agent', () => {

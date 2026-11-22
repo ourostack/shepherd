@@ -11,6 +11,7 @@ import { identityId, readJson, writeJson } from './store.mjs';
 import { plain } from './notice.mjs';
 import { ShepherdError } from './error.mjs';
 import { wakeSender } from './wakes.mjs';
+import { findOuro } from './health-watch.mjs';
 
 export const signinFile = (env = process.env, home = os.homedir()) => env.SHEPHERD_SIGNIN_CONFIG || path.join(home, '.config', 'shepherd', 'signin.json');
 export const queueFile = (d) => path.join(d.state, 'signin-queue.json');
@@ -30,10 +31,10 @@ const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
 // { card, name, owner, ouro, identityFile }, or null when no card is named (then the whole batch goes to the session, as before).
 function personalConfig(p) {
   if (!p || typeof p !== 'object' || !str(p.card)) return null;
-  return { card: str(p.card), name: str(p.name) ?? 'the personal agent', owner: str(p.owner) ?? 'the owner', ouro: str(p.ouro) ?? 'ouro', identityFile: str(p.identityFile) };
+  return { card: str(p.card), name: str(p.name) ?? 'the personal agent', owner: str(p.owner) ?? 'the owner', ouro: str(p.ouro), identityFile: str(p.identityFile) };
 }
 
-const read = (d) => { const q = readJson(queueFile(d), {}); return { items: Array.isArray(q.items) ? q.items : [], lastSent: q.lastSent ?? null, lastSentPersonal: q.lastSentPersonal ?? null }; };
+const read = (d) => { const q = readJson(queueFile(d), {}); return { items: Array.isArray(q.items) ? q.items : [], lastSent: q.lastSent ?? null, lastSentPersonal: q.lastSentPersonal ?? null, personalRetryAt: q.personalRetryAt ?? null }; };
 const write = (d, q) => writeJson(queueFile(d), q);
 
 // Queues one item and returns it. A repeat of an open item (the same key, else the same tool asking for the same thing) is merged into
@@ -55,13 +56,14 @@ export function queue(d, { what, why, resume, tool, key, forWhom, scope }) {
 const SCOPES = ['work', 'personal'];
 
 // Work is anything for the owner's employer: Microsoft accounts and services, Teams, and whatever signin.json's `work` adds (work
-// repositories, a work GitHub account). Everything else is personal. An item queued with an explicit scope keeps it.
-const WORK = /\b(microsoft|teams|azure|entra|outlook|office ?365|m365|sharepoint|onedrive for business|dev\.azure\.com|visualstudio\.com|aka\.ms|work github account)\b/i;
+// repositories, a work GitHub account). Everything else is personal. An item queued with an explicit scope keeps it. The built-in words
+// are matched in what, why and tool only (a resume command's paths say little); the configured patterns are matched in the resume too.
+const WORK = /\b(microsoft|(?<!github )teams|azure|entra|outlook|office ?365|m365|sharepoint|onedrive for business|dev\.azure\.com|visualstudio\.com|aka\.ms|work github account)\b/i;
 export function scopeOf(item, work = []) {
   if (SCOPES.includes(item.scope)) return item.scope;
-  const text = [item.what, item.why, item.tool, item.resume].join('\n');
-  const extra = work.some((w) => text.toLowerCase().includes(w.toLowerCase()));
-  return WORK.test(text) || extra ? 'work' : 'personal';
+  const words = [item.what, item.why, item.tool].join('\n');
+  const all = `${words}\n${item.resume ?? ''}`.toLowerCase();
+  return WORK.test(words) || work.some((w) => all.includes(w.toLowerCase())) ? 'work' : 'personal';
 }
 
 const isOwner = (who) => /^(owner|the owner|operator|the operator)?$/i.test(String(who).trim());
@@ -132,26 +134,35 @@ const pending = (d, cfg) => {
   const q = read(d);
   const today = dayKey(d.now());
   const { work, personal } = split(q.items.filter((i) => !i.doneAt && !i.for), cfg);
-  return { work: q.lastSent !== today ? work : [], personal: q.lastSentPersonal !== today && q.lastSent !== today ? personal : [] };
+  return { work: q.lastSent !== today ? work : [], personal: q.lastSentPersonal !== today ? personal : [], retryAt: q.personalRetryAt };
 };
 
 // The batch is due once the local hour has come, on a day it has not already gone out, and something is open for a route that exists.
+// A personal agent that failed with no session to fall back to is tried again after RETRY_MS, not on every pass.
+export const RETRY_MS = 15 * 60000;
 export const due = (d, cfg) => {
   if (new Date(d.now()).getHours() < cfg.hour) return false;
   const p = pending(d, cfg);
-  return !!(p.personal.length || (p.work.length && (cfg.session ?? identityId(d))));
+  const session = !!(cfg.session ?? identityId(d));
+  return !!((p.work.length && session) || (p.personal.length && (session || !(p.retryAt > d.now()))));
 };
 
 // Sends the personal message with `ouro a2a message`, which seals and signs it with this machine's A2A identity (the receiving agent
-// must have onboarded that identity as a friend). Resolves { ok, error }; never throws.
-export function ouroSender(personal, run = execFile) {
+// must have onboarded that identity as a friend) and waits for the agent's reply, a whole turn. Resolves { ok, error, unconfirmed };
+// never throws. Only a definite non-delivery (no connection, a refusal) is a failure: a timeout means the agent may well have it and is
+// still answering, so it counts as sent (unconfirmed), never as a reason to send the same items to the work chat too.
+export const SEND_TIMEOUT_MS = 120000;
+export function ouroSender(personal, run = execFile, ouro = () => personal.ouro ?? findOuro()) {
   return (card, text) => new Promise((resolve) => {
+    const bin = ouro();
+    if (!bin) return resolve({ ok: false, error: 'the ouro CLI was not found' });
     const args = ['a2a', 'message', '--to', card, '--text', text, '--json', '--why', 'Shepherd morning sign-ins: the owner asked that personal sign-ins reach them only through their personal agent'];
     if (personal.identityFile) args.push('--identity-file', personal.identityFile);
-    run(personal.ouro, args, { timeout: 20000, maxBuffer: 1 << 20 }, (err, stdout, stderr) => {
+    run(bin, args, { timeout: SEND_TIMEOUT_MS, maxBuffer: 1 << 20 }, (err, stdout, stderr) => {
       let r = null;
       try { r = JSON.parse(String(stdout).trim().split('\n').pop()); } catch {}
       if (r?.ok === false) return resolve({ ok: false, error: plain(r.reason ?? r.message ?? 'refused', 240) });
+      if (err?.killed) return resolve({ ok: true, error: null, unconfirmed: true });
       if (err) return resolve({ ok: false, error: plain(String(stderr || err.message), 240) || 'ouro a2a message failed' });
       resolve({ ok: true, error: null });
     });
@@ -160,32 +171,37 @@ export function ouroSender(personal, run = execFile) {
 
 // Sends the batch when it is due. `send` (the session) and `sendPersonal` (the personal agent) are injected for tests. With a personal
 // agent configured, its items go there first as one item; if it can't be reached they join the session's message with a note saying
-// so. Resolves { sent, count, error, personal: 'sent' | 'fallback' | null }.
+// so. Each route records its own day, so a failed route is retried alone; a route with nothing to send that morning counts as sent, so
+// an item queued later waits for tomorrow, as before. Resolves { sent, count, error, personal: 'sent' | 'fallback' | null, personalError }.
 export async function morning(d, cfg = signinConfig(), send = wakeSender(d), sendPersonal = cfg.personal ? ouroSender(cfg.personal) : null) {
-  if (!due(d, cfg)) return { sent: false, count: 0, error: null, personal: null };
+  if (!due(d, cfg)) return { sent: false, count: 0, error: null, personal: null, personalError: null };
   const today = dayKey(d.now());
   const p = pending(d, cfg);
+  const session = cfg.session ?? identityId(d);
+  const mark = (m) => write(d, { ...read(d), ...m });
   let route = null;
-  let note = null;
-  let toSession = p.work;
+  let personalError = null;
   let count = 0;
-  if (p.personal.length) {
+  let toSession = session ? p.work : [];
+  if (p.personal.length && (session || !(p.retryAt > d.now()))) {
     const r = await sendPersonal(cfg.personal.card, personalMessage(p.personal, { owner: cfg.personal.owner, now: d.now() }));
     if (r.ok) {
-      write(d, { ...read(d), lastSentPersonal: today });
       route = 'sent';
       count += p.personal.length;
+      mark({ lastSentPersonal: today, personalRetryAt: null });
     } else {
-      route = 'fallback';
-      note = `${fallbackNote(cfg.personal.name)} (${r.error ?? 'no reply'})`;
-      toSession = [...p.work, ...p.personal];
+      personalError = r.error ?? 'no reply';
+      if (session) { route = 'fallback'; toSession = [...toSession, ...p.personal]; }
+      else mark({ personalRetryAt: d.now() + RETRY_MS });
     }
   }
-  if (!toSession.length) return { sent: count > 0, count, error: null, personal: route };
-  const session = cfg.session ?? identityId(d);
-  if (!session) return { sent: count > 0, count, error: route === 'fallback' ? note : 'no session to send work items to', personal: route };
-  const r = await send(session, [note, batchMessage(toSession)].filter(Boolean).join('\n'), 'enqueue');
-  if (!r.ok) return { sent: count > 0, count, error: r.error, personal: route };
-  write(d, { ...read(d), lastSent: today, ...(route === 'fallback' ? { lastSentPersonal: today } : {}) });
-  return { sent: true, count: count + toSession.length, error: null, personal: route };
+  const quiet = { ...(p.work.length ? {} : { lastSent: today }), ...(p.personal.length ? {} : { lastSentPersonal: today }) };
+  if (!toSession.length) {
+    if (count) mark(quiet);
+    return { sent: count > 0, count, error: personalError, personal: route, personalError };
+  }
+  const r = await send(session, [route === 'fallback' && fallbackNote(cfg.personal.name), batchMessage(toSession)].filter(Boolean).join('\n'), 'enqueue');
+  if (!r.ok) return { sent: count > 0, count, error: r.error, personal: route, personalError };
+  mark({ ...quiet, lastSent: today, ...(route === 'fallback' ? { lastSentPersonal: today, personalRetryAt: null } : {}) });
+  return { sent: true, count: count + toSession.length, error: null, personal: route, personalError };
 }
