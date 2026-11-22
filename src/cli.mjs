@@ -315,8 +315,9 @@ export const COMMANDS = [
       tool: { type: 'string', placeholder: '<tool>', description: 'queue: the tool that asked (agent by default)' },
       key: { type: 'string', placeholder: '<key>', description: 'queue: a stable key; a repeat with the same key merges into the open item' },
       for: { type: 'string', placeholder: '<person>', description: 'queue: whose it is, when not the owner; that item is never in the owner\'s morning batch' },
+      scope: { type: 'string', placeholder: '<work|personal>', description: 'queue: work or personal, when the words alone would be read wrong; with a personal agent in signin.json, personal items go to it and work items to the session' },
     },
-    output: 'queue: { id, what, why, resume, tool, at, doneAt }; list: { items }; preview: { due, session, hour, items, message }; done: { done }; status: { ...item, state: "open" | "done" }',
+    output: 'queue: { id, what, why, resume, tool, scope?, at, doneAt }; list: { items }; preview: { due, session, hour, items, message, personal: { to, items, message } | null }; done: { done }; status: { ...item, state: "open" | "done" }',
     exit: () => 'ok',
     text: (r) => textOf(r),
     async run(input) {
@@ -332,9 +333,11 @@ export const COMMANDS = [
       }
       if (id === 'preview') {
         const cfg = signin.signinConfig();
-        const items = signin.mine(signin.list(d));
-        const message = signin.batchMessage(items);
-        return withText({ due: signin.due(d, cfg), session: cfg.session, hour: cfg.hour, items, message }, message ?? 'nothing is queued for the morning');
+        const parts = signin.split(signin.mine(signin.list(d)), cfg);
+        const message = signin.batchMessage(parts.work);
+        const personal = cfg.personal ? { to: cfg.personal.card, items: parts.personal, message: signin.personalMessage(parts.personal, { owner: cfg.personal.owner, now: d.now() }) } : null;
+        const text = [personal?.message && `To ${cfg.personal.name} (${personal.to}):\n${personal.message}`, message && (personal ? `To the session:\n${message}` : message)].filter(Boolean).join('\n\n');
+        return withText({ due: signin.due(d, cfg), session: cfg.session, hour: cfg.hour, items: parts.work, message, personal }, text || 'nothing is queued for the morning');
       }
       if (id === 'done' || id === 'status') {
         if (!input.id) throw usage('signin', `${id} needs an item id`, `shepherd signin ${id} <id>`);
