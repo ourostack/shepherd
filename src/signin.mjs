@@ -56,7 +56,7 @@ const SCOPES = ['work', 'personal'];
 
 // Work is anything for the owner's employer: Microsoft accounts and services, Teams, and whatever signin.json's `work` adds (work
 // repositories, a work GitHub account). Everything else is personal. An item queued with an explicit scope keeps it.
-const WORK = /\b(microsoft|teams|azure|entra|outlook|office ?365|m365|sharepoint|onedrive for business|dev\.azure\.com|visualstudio\.com|aka\.ms)\b/i;
+const WORK = /\b(microsoft|teams|azure|entra|outlook|office ?365|m365|sharepoint|onedrive for business|dev\.azure\.com|visualstudio\.com|aka\.ms|work github account)\b/i;
 export function scopeOf(item, work = []) {
   if (SCOPES.includes(item.scope)) return item.scope;
   const text = [item.what, item.why, item.tool, item.resume].join('\n');

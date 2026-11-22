@@ -138,6 +138,8 @@ test('work is Microsoft, Teams and the configured work patterns; everything else
   assert.equal(scopeOf(WORK), 'work');
   assert.equal(scopeOf({ ...ITEM, why: 'a Teams meeting bot needs approval' }), 'work');
   assert.equal(scopeOf(ITEM), 'personal');
+  assert.equal(scopeOf({ ...ITEM, why: 'GitHub is waiting for approval to x (work GitHub account a_b)' }), 'work');
+  assert.equal(scopeOf({ ...ITEM, why: 'GitHub is waiting for approval to x (GitHub account a)' }), 'personal');
   assert.equal(scopeOf({ ...ITEM, resume: 'gh -R example-corp/tool run' }, ['Example-Corp/']), 'work');
   assert.equal(scopeOf({ ...WORK, scope: 'personal' }), 'personal');
   const w = world(EARLY);
