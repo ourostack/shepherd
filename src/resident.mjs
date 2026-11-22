@@ -148,7 +148,9 @@ export function watchDuties({ copilotHome, quiet = false, say = () => {}, log = 
       run: async () => {
         const r = await signinMorning(deps({ copilotHome }));
         if (r.error) log(`shepherd: morning sign-ins: ${r.error}`);
-        if (!quiet && r.sent) say(`morning sign-ins: ${r.count} item(s) sent as one message`);
+        if (r.personal === 'sent' && r.personalError) log(`shepherd: morning sign-ins: personal items ${r.personalError}`);
+        if (r.personal === 'fallback') log(`shepherd: morning sign-ins: the personal agent was unreachable (${r.personalError}), so its items went to the session`);
+        if (!quiet && r.sent) say(`morning sign-ins: ${r.count} item(s) sent${r.personal === 'sent' ? ', personal ones to the personal agent' : ' as one message'}`);
       },
     },
   ];
