@@ -2,7 +2,7 @@
 // took a turn. The caller takes the snapshot (after its grace wait and its skip list) and passes pickTargets' result in.
 import fs from 'node:fs';
 import path from 'node:path';
-import { continuedSince, tookTurnSince } from './history.mjs';
+import { continuedSince, deadWork, tookTurnSince } from './history.mjs';
 import { sendTo } from './socket.mjs';
 import { stateDir } from './sessions.mjs';
 
@@ -13,7 +13,16 @@ export const hhmm = (ms) => new Date(ms).toLocaleTimeString('en-US', { hour: '2-
 export const short = (id) => String(id).slice(0, 8);
 
 const lanesNote = (l) => (l ? ` You had said ${l.lanes ?? 'some'} lane${l.lanes === 1 ? ' was' : 's were'} still running${l.minutes != null ? ` (about ${l.minutes} min from done)` : ''}: the restart went ahead without waiting longer, so those lanes were stopped; restart them from their pushed state.` : '');
-export const resumeText = ({ at, why, lanes = null }) => `The app was restarted at ${hhmm(at)}${why ? ` for ${why}` : ''}; resume where you left off. Anything that was in flight when it stopped (a shell command, a subagent, a send or a push) was interrupted: re-check its real state before relying on it, and redo it if it did not finish. Your background subagents and shell jobs were stopped; restart any unfinished ones from their pushed state.${lanesNote(lanes)}`;
+const MAX_NAMED = 8;
+const named = (list) => list.slice(0, MAX_NAMED).map((w) => (w.what && w.what !== w.name ? `${w.name} (${w.what})` : w.name)).join('; ') + (list.length > MAX_NAMED ? `; and ${list.length - MAX_NAMED} more` : '');
+// What was running when the app stopped, by name, so the session restarts exactly those. dead: deadWork()'s answer.
+export const deadNote = (dead) => {
+  const parts = [];
+  if (dead?.subagents?.length) parts.push(`background subagents: ${named(dead.subagents)}`);
+  if (dead?.shells?.length) parts.push(`shell jobs: ${named(dead.shells)}`);
+  return parts.length ? ` These were running when it stopped, and are dead: ${parts.join('. ')}. Restart each one that is not finished from its pushed state.` : '';
+};
+export const resumeText = ({ at, why, lanes = null, dead = null }) => `The app was restarted at ${hhmm(at)}${why ? ` for ${why}` : ''}; resume where you left off. Anything that was in flight when it stopped (a shell command, a subagent, a send or a push) was interrupted: re-check its real state before relying on it, and redo it if it did not finish. Your background subagents and shell jobs were stopped; restart any unfinished ones from their pushed state.${deadNote(dead)}${lanesNote(lanes)}`;
 
 // Who gets a resume message. before/after: [{ id, state: 'busy'|'idle', interrupted }]. A flag the app set before the
 // restart (an old crash nobody resumed) is not this restart's doing and is left alone. Each target also says whether it is
@@ -52,7 +61,7 @@ export async function resume(deps, { targets, startedAt, restartedAt, why = null
   for (const tg of held) log(`${short(tg.id)}${tg.title ? ` "${tg.title}"` : ''}: NOT resumed: ${tg.sizeWhy}; it needs a hand-off to a fresh session`);
   if (held.length) deps.heldBack?.(held.map((tg) => ({ id: tg.id, title: tg.title, bytes: tg.oversize })));
   const results = await pooled(targets.filter((tg) => !tg.oversize), Math.max(1, tt.concurrency || 1), async (tg) => {
-    const text = resumeText({ at: restartedAt, why, lanes: lanes.get(tg.id) || null });
+    const text = resumeText({ at: restartedAt, why, lanes: lanes.get(tg.id) || null, dead: deadWork(deps.history(tg.id).lines) });
     const rec = { id: tg.id, title: tg.title, why: tg.why };
     if (!tg.known) return { ...rec, outcome: 'gone: the app has no such live session (archived or deleted)' };
     if (continuedSince(deps.history(tg.id).lines, startedAt)) {
