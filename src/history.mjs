@@ -125,6 +125,26 @@ export function loopState(lines) {
   return last ? { working: true, why: `mid-turn (last ${last})` } : { working: false, why: 'no agent activity' };
 }
 
+// The background work a session had running when its history stops: sub-agents started and not completed, and async shell
+// jobs started and not completed or stopped, counting only since its last start or resume (what an earlier run left is long
+// dead). Each is { name, what } so a resume message can name it.
+export function deadWork(lines) {
+  let subagents = new Map(), shells = new Map();
+  for (const l of lines) {
+    if (!l || !/"type":"(subagent\.|tool\.execution_start|system\.notification|session\.(start|resume))/.test(l.slice(0, 60))) continue;
+    const e = parse(l);
+    const d = e?.data;
+    if (!d) continue;
+    if (e.type === 'session.start' || e.type === 'session.resume') { subagents = new Map(); shells = new Map(); }
+    else if (e.type === 'subagent.started' && d.executionMode === 'background') subagents.set(d.toolCallId, { name: d.agentDisplayName || d.agentName || 'a subagent', what: d.agentDescription || null });
+    else if (e.type === 'subagent.completed' || e.type === 'subagent.failed') subagents.delete(d.toolCallId);
+    else if (e.type === 'tool.execution_start' && d.toolName === 'bash' && d.arguments?.mode === 'async') shells.set(d.arguments.shellId || d.toolCallId, { name: d.arguments.shellId || 'a shell job', what: d.arguments.description || null });
+    else if (e.type === 'tool.execution_start' && d.toolName === 'stop_bash') shells.delete(d.arguments?.shellId);
+    else if (e.type === 'system.notification' && d.kind?.type === 'shell_completed') shells.delete(d.kind.shellId);
+  }
+  return { subagents: [...subagents.values()], shells: [...shells.values()] };
+}
+
 // Did anything (a person, a resumer, a queue) send the session a message after `since`?
 export function continuedSince(lines, since) {
   for (const l of lines) {

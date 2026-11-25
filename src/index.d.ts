@@ -150,6 +150,7 @@ export function lastTurnAt(lines: string[]): number | null;
 export function loopState(lines: string[]): LoopState;
 export function continuedSince(lines: string[], since: number): boolean;
 export function tookTurnSince(lines: string[], since: number): boolean;
+export function deadWork(lines: string[]): { subagents: { name: string; what: string | null }[]; shells: { name: string; what: string | null }[] };
 export function lastReply(lines: string[], since: number): Reply | null;
 
 export function deps(options?: { copilotHome?: string; ledger?: string; state?: string }): Deps;

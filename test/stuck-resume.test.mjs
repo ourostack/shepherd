@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { RESUMES_PER_DAY, RESUME_TEXT, resumeStuck, stuckPlan, stuckResumeConfig } from '../src/stuck-resume.mjs';
-import { NOW, fakeApp, iso, row, sparseHistory, testDeps } from './fake-sidebar.mjs';
+import { NOW, fakeApp, iso, row, sparseHistory, testDeps, writeHistory } from './fake-sidebar.mjs';
 
 // At 15:49 UTC the stopped session had stopped half an hour earlier.
 const STOPPED = iso(NOW - 30 * 60_000);
@@ -117,6 +117,30 @@ test('the stuck-resume config is off with no file, on only with "enabled": true,
     assert.deepEqual(stuckResumeConfig(file), { enabled: false });
     fs.writeFileSync(file, '{ not json');
     assert.throws(() => stuckResumeConfig(file), (e) => e.code === 'stuck-resume-config' && /is not valid JSON/.test(e.message));
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('an idle session on the interrupted banner is resumed once, and the message names what died', async () => {
+  const home = tmp();
+  try {
+    writeHistory(home, TRACKER, [
+      { type: 'session.start', data: {} },
+      { type: 'subagent.started', data: { toolCallId: 'a1', agentDisplayName: 'Reviewer', agentDescription: 'review the diff', executionMode: 'background' } },
+      { type: 'subagent.started', data: { toolCallId: 'a2', agentDisplayName: 'Done one', executionMode: 'background' } },
+      { type: 'subagent.completed', data: { toolCallId: 'a2' } },
+      { type: 'tool.execution_start', data: { toolName: 'bash', toolCallId: 'b1', arguments: { mode: 'async', shellId: 'sh1', description: 'run the suite' } } },
+    ], NOW - 3600_000);
+    const app = fakeApp();
+    const d = testDeps(home, { app });
+    const banner = row(TRACKER, { name: 'Lane', state: 'idle', wasInterrupted: true, lastActivity: STOPPED });
+    assert.equal(await resumeStuck([banner], d), 1);
+    assert.match(app.sent[0].text, /Reviewer \(review the diff\)/);
+    assert.match(app.sent[0].text, /sh1 \(run the suite\)/);
+    assert.doesNotMatch(app.sent[0].text, /Done one/);
+    assert.equal(await resumeStuck([banner], d, NOW + 60_000), 0);
+    assert.equal(await resumeStuck([row(SMALL, { state: 'idle', wasInterrupted: false, lastActivity: STOPPED })], d), 0);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
