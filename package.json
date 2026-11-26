@@ -1,6 +1,6 @@
 {
   "name": "@ouro.bot/shepherd",
-  "version": "0.21.3",
+  "version": "0.21.4",
   "description": "Shepherd keeps the flock: the GitHub Copilot app's sessions, as work. A small library and CLI to read, message and archive them through the app's local socket and database.",
   "type": "module",
   "bin": {

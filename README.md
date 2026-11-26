@@ -83,6 +83,8 @@ Each verb below takes its arguments as flags, or as one JSON object on stdin wit
 
 `create` records the sessions it makes, which is what lets `archive` take them without `--owner-asked`. The questions and plans that `answer` and `plan` act on are heard by the resident `watch --every`, which keeps one observer connection open; without it, `answer` and `plan` refuse. Replies to a session come back through `messages` and `session`, not pushed to the caller. The CLI archive keeps the history uncompressed.
 
+If a send reports `history_preserved`, delivery is unknown: Shepherd does not retry or replace the relay session. The error names the affected session (Ouroboros' own session for a peer relay), with `shepherd messages <id>` and `shepherd open <id>` to inspect its conversation and the app's resume error. Check whether the request ran before sending it again. This app error is separate from Shepherd's `restore-history`, which only uncompresses a local history file.
+
 Read-only except `restore-history`, `watch`, `install`, an applied quota tick, `sidebar apply`, `retire apply` and `wakes poll` (their own state, log and waiting files, the app's sidebar, the archive log, and, for `wakes poll`, the wakes it sends only when `wakes.json` enables them). `quota read`, `quota plan`, `quota status`, `sidebar` (plan), `retire plan`, `wakes` (status) and `stuck` (plan) change nothing. Exit codes: 0 ok, 1 the app's data could not be read, the history could not be restored, the agent could not load, or the app refused a sidebar change, 2 usage.
 
 ## Run it always

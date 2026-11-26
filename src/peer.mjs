@@ -54,7 +54,7 @@ export async function sendAsPeer(d, id, message, mode, { rows, create, deliver }
   const since = d.now() - 2000;
   const asked = await deliver(d, from.id, relayRequest(args), 'immediate');
   const base = { from: from.name, from_session_id: from.id, message: args.message };
-  if (!asked.ok) return { ok: false, ...base, error: `Ouroboros' own chat did not take the relay request: ${asked.error}` };
+  if (!asked.ok) return { ok: false, ...base, error: `Ouroboros' own chat did not confirm the relay request: ${asked.error}` };
   const deadline = d.now() + (d.relayWaitMs ?? RELAY_WAIT_MS);
   for (;;) {
     const outcome = relayOutcome(d.history(from.id).lines, args, since);
