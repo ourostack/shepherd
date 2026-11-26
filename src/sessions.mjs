@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ShepherdError } from './error.mjs';
 import { exchange } from './socket.mjs';
-import { lastTurnAt, loopState, readTail } from './history.mjs';
+import { derivedFromHistory, lastTurnAt, loopState, readTail } from './history.mjs';
 
 // A session whose history is bigger than this is never resumed: the app loads the whole file into memory on resume.
 export const MAX_HISTORY_BYTES = 500 * 1024 * 1024;
@@ -27,12 +27,12 @@ export const stateDir = (home = os.homedir()) => path.join(home, 'Library', 'Cac
 function judge(deps, r, now) {
   const bytes = deps.historySize(r.id);
   if (bytes > MAX_HISTORY_BYTES) return { id: r.id, title: r.title, mode: r.mode || null, state: 'idle', why: `its history is ${Math.round(bytes / 1048576)} MB, over the ${MAX_HISTORY_BYTES / 1048576} MB resume cap`, running: Boolean(r.running), interrupted: Boolean(r.interrupted), oversize: bytes };
-  const h = deps.history(r.id);
-  const last = lastTurnAt(h.lines);
+  const h = derivedFromHistory(deps, r.id, now, 'judge', (x) => ({ mtime: x.mtime, last: lastTurnAt(x.lines), loop: loopState(x.lines) }));
+  const last = h.last;
   // A session whose last turn is over a day old is idle, whatever flag the app still carries for it.
   const stale = last != null ? last < now - STALE_MS : h.mtime > 0 && h.mtime < now - STALE_MS;
   if (stale) return { id: r.id, title: r.title, mode: r.mode || null, state: 'idle', why: 'its last turn was over 24 h ago', running: false, interrupted: false, stale: true };
-  const v = h.mtime >= now - LOOKBACK_MS ? loopState(h.lines) : { working: false, why: 'no recent activity' };
+  const v = h.mtime >= now - LOOKBACK_MS ? h.loop : { working: false, why: 'no recent activity' };
   // The app's own running flag counts too: either one says the session had work in flight.
   const busy = v.working || Boolean(r.running);
   return { id: r.id, title: r.title, mode: r.mode || null, state: busy ? 'busy' : 'idle', why: v.working ? v.why : r.running ? 'the app marks it running' : v.why, running: Boolean(r.running), interrupted: Boolean(r.interrupted) };
@@ -78,6 +78,7 @@ export function deps({ copilotHome = path.join(os.homedir(), '.copilot'), ledger
       const f = historyFile(copilotHome, id);
       try { return { lines: readTail(f), mtime: fs.statSync(f).mtimeMs }; } catch { return { lines: [], mtime: 0 }; }
     },
+    historyStamp: (id) => { try { const s = fs.statSync(historyFile(copilotHome, id)); return { key: `${s.mtimeMs}:${s.size}`, mtime: s.mtimeMs }; } catch { return null; } },
     historySize: (id) => { try { return fs.statSync(historyFile(copilotHome, id)).size; } catch { return 0; } },
     exchange: (messages, opts) => exchange(copilotHome, messages, opts),
     historyPath: (id) => historyFile(copilotHome, id),
