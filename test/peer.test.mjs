@@ -18,7 +18,7 @@ const TARGET = 'a1000000-0000-4000-8000-000000000001';
 const target = { id: TARGET, name: 'Target', isRunning: false, updatedAt: new Date().toISOString() };
 
 // The pretend app, with Ouroboros' chat listed and its agent making (relay: 'ok'), failing or altering the send_session_message call.
-async function withRelay(relay, fn) {
+async function withRelay(relay, fn, sendReply = null) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shepherd-peer-'));
   const home = path.join(root, 'app');
   const chats = [{ id: CHAT_SESSION, title: 'Ouroboros', updatedAt: new Date().toISOString() }];
@@ -31,6 +31,7 @@ async function withRelay(relay, fn) {
   const app = await startFakeApp(home, {
     reply: (m) => {
       if (m.type === 'send_message' && m.session_id === CHAT_SESSION && relay) {
+        if (sendReply) return sendReply(m);
         const args = JSON.parse(m.prompt.split('\n').at(-1));
         append({ type: 'tool.execution_start', data: { toolCallId: 't1', toolName: 'send_session_message', arguments: relay === 'altered' ? { ...args, message: 'other' } : args } });
         if (relay !== 'altered') append({ type: 'tool.execution_complete', data: { toolCallId: 't1', success: relay !== 'refused', error: relay === 'refused' ? { message: 'session is archived' } : undefined } });
@@ -67,6 +68,33 @@ test('a relay that fails or alters the text is reported, never sent as a user pr
       assert.equal(r.status, 'failed');
       assert.equal(app.received.filter((m) => m.type === 'send_message' && m.session_id === TARGET).length, 0);
     });
+  }
+});
+
+test('history_preserved names the relay session and how to inspect unknown delivery without retrying', async () => {
+  for (const dispatched of [false, true]) {
+    await withRelay('ok', async ({ d, app }) => {
+      fs.mkdirSync(d.state, { recursive: true });
+      fs.writeFileSync(path.join(d.state, 'identity.json'), JSON.stringify({ session_id: CHAT_SESSION }));
+      const r = await send(d, { session_id: TARGET, message: 'hello' });
+      assert.equal(r.ok, false);
+      assert.equal(r.status, 'failed');
+      assert.equal(r.from_session_id, CHAT_SESSION);
+      assert.match(r.error, /history_preserved/);
+      assert.match(r.error, /delivery is unknown/);
+      assert.ok(r.error.includes(`shepherd messages ${CHAT_SESSION}`));
+      assert.ok(r.error.includes(`shepherd open ${CHAT_SESSION}`));
+      assert.match(r.error, /before (?:sending|retrying)/);
+      if (dispatched) assert.match(r.error, /Saved conversation could not be loaded/);
+      assert.deepEqual(app.received.filter((m) => m.type === 'send_message').map((m) => m.session_id), [CHAT_SESSION]);
+      assert.equal(app.received.some((m) => m.type === 'create_session'), false);
+      assert.equal(JSON.parse(fs.readFileSync(path.join(d.state, 'identity.json'), 'utf8')).session_id, CHAT_SESSION);
+    }, (m) => [
+      ...(dispatched ? [{ type: 'session_dispatch_state', request_id: m.request_id, session_id: m.session_id, dispatch_may_have_started: true }] : []),
+      dispatched
+        ? { type: 'session_resume_failed', request_id: m.request_id, session_id: m.session_id, reason: 'history_preserved', message: 'Saved conversation could not be loaded' }
+        : { type: 'error', request_id: m.request_id, error: 'history_preserved' },
+    ]);
   }
 });
 

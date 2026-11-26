@@ -212,6 +212,10 @@ export async function deliver(d, id, message, mode) {
     }
     return reply.request_id === requestId || (reply.session_id === id && /^session_(message_delivery_unknown|resume_failed)$/.test(String(reply.type))) ? 'fail' : 'ignore';
   }, d.sendWaitMs ?? SEND_WAIT_MS);
+  if (!sent.ok && [sent.error, sent.frame?.code, sent.frame?.reason, sent.frame?.error?.code].includes('history_preserved')) {
+    const detail = sent.error === 'history_preserved' ? '' : `: ${sent.error}`;
+    return { ...sent, error: `the app reported history_preserved for session ${id}${detail}; delivery is unknown. Run shepherd messages ${id}, then shepherd open ${id} to inspect the conversation and the app's resume error before retrying. Confirm whether the request ran before sending it again; no automatic retry was made` };
+  }
   const unconfirmed = !sent.ok && interim && sent.frame?.type === 'session_dispatch_state';
   return unconfirmed ? { ...sent, error: 'the app began delivering the message but had not confirmed it in time; read the session before sending it again' } : sent;
 }
