@@ -75,7 +75,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ShepherdError } from './error.mjs';
-import { continuedSince, linesUntil, loopState, tookTurnSince } from './history.mjs';
+import { continuedSince, derivedFromHistory, linesUntil, loopState, tookTurnSince } from './history.mjs';
 import { sendTo, socketUrl } from './socket.mjs';
 
 const PATHS = `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH || ''}`;
@@ -825,9 +825,9 @@ function liveOf(d, st, now) {
   const since = now - 14 * 86400000;
   for (const s of st.sessions) {
     if (Date.parse(s.updated_at || 0) < since && !s.is_running) continue;
-    const { lines } = d.history(s.id);
+    const h = derivedFromHistory(d, s.id, now, 'live', ({ lines }) => ({ loop: loopState(linesUntil(lines, now)).working, stall: quotaStall(lines) }));
     const w = warm(d, s.id);
-    live[s.id] = { warm: w, running: Boolean(s.is_running), working: Boolean(w && loopState(linesUntil(lines, now)).working), stall: quotaStall(lines) };
+    live[s.id] = { warm: w, running: Boolean(s.is_running), working: Boolean(w && h.loop), stall: h.stall };
   }
   return live;
 }

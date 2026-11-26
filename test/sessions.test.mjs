@@ -71,3 +71,34 @@ test('deps.sql: no database says where it looked and how to fix it', async () =>
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+// The resident watch asks about every session each minute; reading and parsing megabytes of an unchanged one each time burned a core.
+test('snapshot: an unchanged history is read once however many passes ask, a changed or future-dated one is read again', async () => {
+  const rows = Array.from({ length: 50 }, (_, i) => ({ id: `dddddddd-0000-4000-8000-${String(i).padStart(12, '0')}`, title: `s${i}`, running: 0, workspace_id: null }));
+  let reads = 0;
+  const stamps = new Map();
+  const d = { ...fakeDeps(rows), history: () => { reads += 1; return { lines: MID, mtime: NOW }; }, historyStamp: (id) => stamps.get(id) ?? { key: 'a', mtime: NOW } };
+  for (let pass = 0; pass < 5; pass++) await snapshot(d);
+  assert.equal(reads, 50, 'five passes over unchanged histories read each once');
+  stamps.set(rows[0].id, { key: 'b', mtime: NOW });
+  const [first] = await snapshot(d);
+  assert.equal(reads, 51, 'a changed file is read again');
+  assert.equal(first.state, 'busy');
+  const future = { ...fakeDeps(rows), history: () => { reads += 1; return { lines: MID, mtime: NOW }; }, historyStamp: () => ({ key: 'c', mtime: NOW + 60000 }) };
+  reads = 0;
+  await snapshot(future); await snapshot(future);
+  assert.equal(reads, 100, 'a file newer than the clock is never trusted from memory');
+});
+
+test('deps.historyStamp: the file\'s mtime and size, or null when it is missing', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'shep-stamp-'));
+  const id = 'eeeeeeee-0000-4000-8000-000000000005';
+  const d = deps({ copilotHome: home, state: home });
+  assert.equal(d.historyStamp(id), null);
+  fs.mkdirSync(path.join(home, 'session-state', id), { recursive: true });
+  fs.writeFileSync(path.join(home, 'session-state', id, 'events.jsonl'), 'x\n');
+  const a = d.historyStamp(id);
+  assert.match(a.key, /:2$/);
+  fs.appendFileSync(path.join(home, 'session-state', id, 'events.jsonl'), 'y\n');
+  assert.notEqual(d.historyStamp(id).key, a.key);
+});

@@ -25,6 +25,22 @@ export function readTail(f, bytes = TAIL_BYTES, { keepPartial = false } = {}) {
   } catch { return []; } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 
+// What `derive` reads off (kept per `kind`) a session's history, computed again only when the file changed. The resident watch asks about
+// every session each pass, and reading and parsing megabytes of an idle one every minute burned a core. `d.historyStamp(id)`
+// is { key, mtime } (a file's mtime and size); without it, or when the file is newer than `now`, nothing is kept. The
+// stamp is taken before the read, so a write in between only makes the next pass read again.
+const derived = new WeakMap();
+export function derivedFromHistory(d, id, now, kind, derive) {
+  const stamp = d.historyStamp?.(id);
+  let cache = derived.get(d);
+  if (!cache) derived.set(d, (cache = new Map()));
+  const hit = stamp && cache.get(`${kind}:${id}`);
+  if (hit && hit.key === stamp.key) return hit.value;
+  const value = derive(d.history(id));
+  if (stamp && stamp.mtime <= now) cache.set(`${kind}:${id}`, { key: stamp.key, value });
+  return value;
+}
+
 const MAX_LINE_BYTES = 8 * 1024 * 1024;
 
 // The complete lines of a file from byte `from` on, about `maxBytes` of them at most (the line that crosses it is read
